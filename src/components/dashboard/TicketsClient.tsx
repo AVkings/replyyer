@@ -1,12 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Eye, UserCheck, X, ExternalLink, Clock, AlertCircle, CheckCircle2, MessageCircle } from "lucide-react";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-
-// Note: admin client is server-only — for dashboard actions we use API routes instead.
-// This component uses fetch to call server endpoints.
+import { Eye, UserCheck, X, ExternalLink, Clock, AlertCircle, CheckCircle2, Send, Loader2 } from "lucide-react";
 
 type Ticket = {
   id: string;
@@ -20,6 +16,25 @@ type Ticket = {
 };
 
 type ChatMessage = { role: string; content: string; attachment_url: string | null; timestamp: string };
+
+function formatDate(iso: string) {
+  // Deterministic UTC format to avoid hydration mismatch (server vs client locale)
+  try {
+    const d = new Date(iso);
+    // Use UTC to be consistent across server/client timezones
+    return d.toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+    }) + " UTC";
+  } catch {
+    return iso.slice(0, 19).replace("T", " ");
+  }
+}
 
 function priorityLabel(p: number) {
   if (p >= 5) return { text: "P5 · Critical", cls: "bg-white text-black" };
@@ -43,6 +58,9 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [takingOverId, setTakingOverId] = useState<string | null>(null);
+  const [humanInput, setHumanInput] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() => {
     if (filter === "all") return tickets;
@@ -82,7 +100,7 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
       if (!res.ok) throw new Error(json.error ?? "Take over failed");
       setTickets((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: "escalated" } : x)));
       if (selected?.id === t.id) setSelected((s) => (s ? { ...s, status: "escalated" } : s));
-      showToast("success", "Ticket escalated — human takeover");
+      showToast("success", "Ticket escalated — human takeover. You can now reply.");
     } catch (e) {
       showToast("error", e instanceof Error ? e.message : String(e));
     } finally {
@@ -90,9 +108,32 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
     }
   };
 
+  const sendHumanReply = async () => {
+    if (!selected || !humanInput.trim()) return;
+    setIsSending(true);
+    try {
+      const res = await fetch("/api/dashboard/conversation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: selected.conversation_id, content: humanInput.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Failed to send");
+      // Optimistically append
+      const newMsg: ChatMessage = { role: "ai", content: humanInput.trim(), attachment_url: null, timestamp: new Date().toISOString() };
+      setChat((prev) => (prev ? [...prev, newMsg] : [newMsg]));
+      setHumanInput("");
+      showToast("success", "Reply sent to customer");
+      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+    } catch (e) {
+      showToast("error", e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   return (
     <>
-      {/* Filters */}
       <div className="flex flex-wrap gap-2">
         {([
           { k: "all", label: "All" },
@@ -112,7 +153,6 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
         ))}
       </div>
 
-      {/* List */}
       {filtered.length === 0 ? (
         <div className="rounded-[24px] border border-neutral-800 bg-neutral-950 p-10 text-center">
           <p className="text-sm text-neutral-500">No tickets in this filter.</p>
@@ -140,26 +180,19 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={`rounded-full px-2.5 py-1 text-xs font-semibold tracking-tight ${pri.cls}`}>{pri.text}</span>
                         <span className={`rounded-full border px-2.5 py-1 text-xs ${st.cls}`}>{st.label}</span>
-                        <span className="inline-flex items-center gap-1 text-xs text-neutral-600">
+                        <span className="inline-flex items-center gap-1 text-xs text-neutral-600" suppressHydrationWarning>
                           <Clock className="h-3 w-3" />
-                          {new Date(t.created_at).toLocaleString()}
+                          {formatDate(t.created_at)}
                         </span>
                       </div>
                       <h3 className="mt-3 text-sm font-semibold leading-tight text-white">{t.title}</h3>
                       <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-neutral-500">{t.ai_summary ?? "—"}</p>
                     </div>
                     <div className="flex shrink-0 gap-2 sm:flex-col lg:flex-row">
-                      <button
-                        onClick={() => viewChat(t)}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-800 bg-black px-3.5 py-2 text-xs font-medium text-white hover:bg-neutral-900"
-                      >
+                      <button onClick={() => viewChat(t)} className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-800 bg-black px-3.5 py-2 text-xs font-medium text-white hover:bg-neutral-900">
                         <Eye className="h-3.5 w-3.5" /> View Chat
                       </button>
-                      <button
-                        onClick={() => takeOver(t)}
-                        disabled={takingOverId === t.id || t.status === "escalated"}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-white px-3.5 py-2 text-xs font-semibold text-black hover:bg-neutral-200 disabled:opacity-50"
-                      >
+                      <button onClick={() => takeOver(t)} disabled={takingOverId === t.id || t.status === "escalated"} className="inline-flex items-center gap-1.5 rounded-xl bg-white px-3.5 py-2 text-xs font-semibold text-black hover:bg-neutral-200 disabled:opacity-50">
                         <UserCheck className="h-3.5 w-3.5" /> {takingOverId === t.id ? "…" : "Take Over"}
                       </button>
                     </div>
@@ -171,27 +204,11 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
         </div>
       )}
 
-      {/* Chat modal */}
       <AnimatePresence>
         {selected && (
           <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
-              onClick={() => {
-                setSelected(null);
-                setChat(null);
-              }}
-            />
-            <motion.div
-              initial={{ opacity: 0, y: 20, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 10, scale: 0.98 }}
-              transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[92%] max-w-[640px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[28px] border border-neutral-800 bg-neutral-950 shadow-2xl"
-            >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={() => { setSelected(null); setChat(null); }} />
+            <motion.div initial={{ opacity: 0, y: 20, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.98 }} transition={{ type: "spring", stiffness: 400, damping: 30 }} className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[92%] max-w-[640px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[28px] border border-neutral-800 bg-neutral-950 shadow-2xl">
               <div className="flex items-center justify-between border-b border-neutral-800 px-6 py-4">
                 <div>
                   <p className="text-sm font-semibold text-white">{selected.title}</p>
@@ -221,39 +238,47 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
                               Attachment <ExternalLink className="h-3 w-3" />
                             </a>
                           )}
-                          <p className="mt-1 text-[11px] opacity-60">{new Date(m.timestamp).toLocaleString()}</p>
+                          <p className="mt-1 text-[11px] opacity-60" suppressHydrationWarning>{formatDate(m.timestamp)}</p>
                         </div>
                       </div>
                     ))}
+                    <div ref={chatEndRef} />
                   </div>
                 )}
               </div>
 
-              <div className="border-t border-neutral-800 px-6 py-4">
-                <button
-                  onClick={() => takeOver(selected)}
-                  disabled={takingOverId === selected.id || selected.status === "escalated"}
-                  className="w-full rounded-2xl bg-white py-3 text-sm font-semibold text-black hover:bg-neutral-200 disabled:opacity-50"
-                >
-                  {selected.status === "escalated" ? "Already escalated" : takingOverId === selected.id ? "Taking over…" : "Take over conversation"}
-                </button>
-              </div>
+              {/* Human reply area — only when escalated / taken over */}
+              {selected.status === "escalated" ? (
+                <div className="border-t border-neutral-800 bg-neutral-950 p-3">
+                  <div className="flex gap-2">
+                    <input
+                      value={humanInput}
+                      onChange={(e) => setHumanInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendHumanReply(); } }}
+                      placeholder="Reply as human..."
+                      className="flex-1 rounded-2xl border border-neutral-800 bg-black px-4 py-3 text-sm text-white placeholder:text-neutral-600 outline-none focus:border-white"
+                    />
+                    <button onClick={sendHumanReply} disabled={isSending || !humanInput.trim()} className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-black hover:bg-neutral-200 disabled:opacity-50">
+                      {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-neutral-600">You are now chatting as human. Customer will see this in widget.</p>
+                </div>
+              ) : (
+                <div className="border-t border-neutral-800 px-6 py-4">
+                  <button onClick={() => takeOver(selected)} disabled={takingOverId === selected.id} className="w-full rounded-2xl bg-white py-3 text-sm font-semibold text-black hover:bg-neutral-200 disabled:opacity-50">
+                    {takingOverId === selected.id ? "Taking over…" : "Take over to reply"}
+                  </button>
+                </div>
+              )}
             </motion.div>
           </>
         )}
       </AnimatePresence>
 
-      {/* Toast */}
       <AnimatePresence>
         {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm shadow-xl backdrop-blur-md ${
-              toast.type === "success" ? "border-neutral-800 bg-white text-black" : "border-neutral-800 bg-black text-white"
-            }`}
-          >
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm shadow-xl backdrop-blur-md ${toast.type === "success" ? "border-neutral-800 bg-white text-black" : "border-neutral-800 bg-black text-white"}`}>
             {toast.type === "success" ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
             {toast.msg}
           </motion.div>
