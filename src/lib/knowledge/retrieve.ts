@@ -41,13 +41,35 @@ export async function retrieveRelevantChunks(
 
   const admin = createSupabaseAdminClient();
 
-  let embedding: number[];
+  let embedding: number[] | null;
   try {
     embedding = await createEmbedding(trimmed);
   } catch (e) {
     console.error("[retrieve] embedding failed:", e);
-    // Return empty so chat can still respond without context (graceful degradation)
-    return [];
+    embedding = null;
+  }
+
+  // If embeddings unavailable (Kira 404), fallback to text search (ILIKE) so ingest without vectors still works
+  if (!embedding) {
+    console.warn("[retrieve] embeddings unavailable, falling back to text search");
+    const keywords = trimmed.split(/\s+/).filter((w) => w.length > 2).slice(0, 5);
+    if (keywords.length === 0) return [];
+    // Simple ILIKE search: content_text contains any keyword
+    let queryBuilder = admin.from("knowledge_bases").select("id, organization_id, url_source, content_text").eq("organization_id", organizationId).limit(count);
+    // Build OR filter for keywords
+    const orFilter = keywords.map((kw) => `content_text.ilike.%${kw}%`).join(",");
+    const { data: textData, error: textErr } = await queryBuilder.or(orFilter);
+    if (textErr) {
+      console.error("[retrieve] text fallback failed:", textErr.message);
+      return [];
+    }
+    return (textData ?? []).map((row) => ({
+      id: row.id,
+      organization_id: row.organization_id,
+      url_source: row.url_source,
+      content_text: row.content_text,
+      similarity: 0.85, // pseudo similarity for text fallback
+    })) as RetrievedChunk[];
   }
 
   // Primary: thresholded RPC

@@ -35,21 +35,31 @@ export const KIRA_MODEL = process.env.KIRA_MODEL ?? "hy3";
 
 /**
  * Embedding helper with fallback.
- * Some providers expose a separate embedding model; we default to hy3
- * but allow KIRA_EMBEDDING_MODEL override.
+ * Kira's /embeddings is 404 (chat-only models like hy3). We try Kira first,
+ * then gracefully return null so ingestion can store without vector and
+ * retrieve can fallback to text search (ILIKE) instead of failing all chunks.
  */
-export async function createEmbedding(input: string): Promise<number[]> {
+export async function createEmbedding(input: string): Promise<number[] | null> {
   const client = getKiraClient();
   const embeddingModel = process.env.KIRA_EMBEDDING_MODEL ?? KIRA_MODEL;
 
-  const res = await client.embeddings.create({
-    model: embeddingModel,
-    input,
-  });
-
-  const embedding = res.data[0]?.embedding;
-  if (!embedding) throw new Error("Kira embedding returned no data");
-  return embedding;
+  try {
+    const res = await client.embeddings.create({
+      model: embeddingModel,
+      input,
+    });
+    const embedding = res.data[0]?.embedding;
+    if (!embedding) throw new Error("Kira embedding returned no data");
+    return embedding;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Kira returns 404 Cannot POST /api/v1/embeddings — chat-only, no embeddings
+    if (msg.includes("404") || msg.includes("Cannot POST") || msg.includes("embeddings")) {
+      console.warn(`[kira] embeddings not available on ${embeddingModel} (${msg.slice(0,120)}), will store without vector and use text search fallback`);
+      return null;
+    }
+    throw e;
+  }
 }
 
 /**

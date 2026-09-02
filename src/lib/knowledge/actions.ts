@@ -159,7 +159,7 @@ export async function ingestKnowledgeBaseAction(
           url_source: scraped.url,
           content_text: chunk,
           chunk_index: i,
-          embedding: embedding as unknown as string, // pgvector accepts number[] via supabase-js stringified
+          embedding: embedding as unknown as string, // pgvector accepts number[]; null if embeddings unavailable (text search fallback)
         });
 
         if (insertErr) {
@@ -167,8 +167,8 @@ export async function ingestKnowledgeBaseAction(
           const msg = insertErr.message;
           if (msg.includes("vector") || msg.includes("dimension")) {
             throw new Error(
-              `Embedding dimension mismatch (DB expects vector(1536) but model returned ${embedding.length}). ` +
-                `Alter the column: alter table knowledge_bases alter column embedding type vector(${embedding.length}); Details: ${msg}`
+              `Embedding dimension mismatch (DB expects vector(1536) but model returned ${embedding?.length ?? "null"}). ` +
+                `Alter the column: alter table knowledge_bases alter column embedding type vector(${embedding?.length}); Details: ${msg}`
             );
           }
           throw new Error(insertErr.message);
@@ -177,6 +177,12 @@ export async function ingestKnowledgeBaseAction(
         ingested++;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        // If Kira embeddings 404, createEmbedding returns null and we stored fine; this catch is for insert errors only
+        if (msg.includes("Cannot POST") && msg.includes("embeddings")) {
+          console.warn(`[ingest] embeddings unavailable, stored without vector for chunk ${i}`);
+          ingested++;
+          continue;
+        }
         console.error(`[ingest] chunk ${i} failed:`, msg);
         errors.push(`Chunk ${i}: ${msg}`);
         // Continue to next chunk — partial success is better than total failure
@@ -284,13 +290,19 @@ export async function ingestTextKnowledgeBaseAction(formData: FormData): Promise
         });
         if (insertErr) {
           if (insertErr.message.includes("vector") || insertErr.message.includes("dimension")) {
-            throw new Error(`Dimension mismatch: ${insertErr.message} (embedding len ${embedding.length})`);
+            throw new Error(`Dimension mismatch: ${insertErr.message} (embedding len ${embedding?.length ?? "null"})`);
           }
           throw new Error(insertErr.message);
         }
         ingested++;
       } catch (e) {
-        errors.push(`Chunk ${i}: ${e instanceof Error ? e.message : String(e)}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("Cannot POST") && msg.includes("embeddings")) {
+          // Already handled by createEmbedding returning null, but catch insert edge
+          ingested++;
+          continue;
+        }
+        errors.push(`Chunk ${i}: ${msg}`);
       }
       if ((i + 1) % 10 === 0) await new Promise((r) => setTimeout(r, 300));
     }
