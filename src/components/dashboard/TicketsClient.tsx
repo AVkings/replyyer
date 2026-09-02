@@ -37,11 +37,11 @@ function formatDate(iso: string) {
 }
 
 function priorityLabel(p: number) {
-  if (p >= 5) return { text: "P5 · Critical", cls: "bg-white text-black" };
-  if (p === 4) return { text: "P4 · High", cls: "bg-neutral-200 text-black" };
-  if (p === 3) return { text: "P3 · Medium", cls: "border border-neutral-700 bg-black text-white" };
-  if (p === 2) return { text: "P2 · Low", cls: "border border-neutral-800 bg-neutral-950 text-neutral-300" };
-  return { text: "P1 · Minimal", cls: "border border-neutral-800 bg-black text-neutral-500" };
+  if (p >= 5) return { text: "P5 · Critical", cls: "bg-red-600 text-white border-red-600" };
+  if (p === 4) return { text: "P4 · High", cls: "bg-orange-500 text-white border-orange-500" };
+  if (p === 3) return { text: "P3 · Medium", cls: "bg-yellow-500 text-black border-yellow-500" };
+  if (p === 2) return { text: "P2 · Low", cls: "bg-blue-600 text-white border-blue-600" };
+  return { text: "P1 · Minimal", cls: "bg-neutral-700 text-white border-neutral-700" };
 }
 
 function statusBadge(s: string) {
@@ -66,6 +66,29 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
     if (filter === "all") return tickets;
     return tickets.filter((t) => t.status === filter);
   }, [tickets, filter]);
+
+  const exportToExcel = () => {
+    const headers = ["Priority", "Title", "Summary", "Status", "Created At", "Conversation ID"];
+    const rows = filtered.map((t) => [
+      `P${t.priority_level}`,
+      `"${t.title.replace(/"/g, '""')}"`,
+      `"${(t.ai_summary ?? "").replace(/"/g, '""').slice(0, 200)}"`,
+      t.status,
+      formatDate(t.created_at),
+      t.conversation_id,
+    ]);
+    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `repllyer-tickets-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast("success", `Exported ${filtered.length} tickets to CSV (Excel compatible)`);
+  };
 
   const showToast = (type: "success" | "error", msg: string) => {
     setToast({ type, msg });
@@ -134,7 +157,7 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
 
   return (
     <>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {([
           { k: "all", label: "All" },
           { k: "auto_resolved", label: "Auto-resolved" },
@@ -151,6 +174,13 @@ export default function TicketsClient({ tickets: initial }: { tickets: Ticket[] 
             {label}
           </button>
         ))}
+        <button
+          onClick={exportToExcel}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-neutral-800 bg-black px-4 py-2 text-xs font-medium text-white hover:bg-neutral-900"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+          Export Excel
+        </button>
       </div>
 
       {filtered.length === 0 ? (

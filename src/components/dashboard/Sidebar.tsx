@@ -3,19 +3,23 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { LayoutDashboard, Ticket, Settings, LogOut, Sparkles, MessageCircle, Database } from "lucide-react";
+import { LayoutDashboard, Ticket, Settings, LogOut, Sparkles, MessageCircle, Database, Palette, CreditCard, BookOpen } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useState } from "react";
 
 const NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/tickets", label: "Tickets", icon: Ticket },
+  { href: "/dashboard/chatbox", label: "Chat Box", icon: Palette },
+  { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
 const SECONDARY = [
   { href: "/chat-demo", label: "Chat Demo", icon: MessageCircle },
   { href: "/ingest", label: "Ingest", icon: Database },
+  { href: "/pricing", label: "Pricing", icon: CreditCard },
+  { href: "/docs", label: "Docs", icon: BookOpen },
 ];
 
 export default function Sidebar({ email }: { email?: string | null }) {

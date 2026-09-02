@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Sparkles, Database, MessageCircle, LayoutDashboard, ArrowRight, BookOpen } from "lucide-react";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import GridTrail from "@/components/ui/GridTrail";
 
 export const dynamic = "force-dynamic";
 
@@ -12,9 +13,9 @@ export default async function Home() {
   const isAuthed = !!user;
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-black text-white overflow-hidden">
+      <GridTrail className="opacity-40" />
       <div className="pointer-events-none fixed inset-0">
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.06)_1px,transparent_1px)] bg-[size:48px_48px]" />
         <div className="absolute inset-0 bg-gradient-to-b from-black via-transparent to-black" />
       </div>
 

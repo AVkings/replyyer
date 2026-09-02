@@ -158,8 +158,24 @@ export async function POST(req: NextRequest) {
     }
 
     const organizationId = await ensureOrganizationId(rawOrg);
-    const conversationId = await ensureConversation({ organizationId, sessionId, customerEmail });
     const admin = createSupabaseAdminClient();
+
+    // --- Conversation limit check (pricing) ---
+    // Check if this is a new conversation (not existing) to enforce limits
+    const { data: existingConv } = await admin.from("conversations").select("id").eq("organization_id", organizationId).eq("session_id", sessionId).maybeSingle();
+    const isNewConversation = !existingConv;
+    if (isNewConversation) {
+      const { data: limitOk, error: limitErr } = await admin.rpc("increment_conversation_usage", { org_id: organizationId });
+      // If RPC not exists (billing.sql not run), fallback to allow
+      if (!limitErr && limitOk === false) {
+        return NextResponse.json(
+          { success: false, error: "Conversation limit reached for your plan. Please upgrade at /pricing or /dashboard/billing. Free: 180/mo, Basic 300 $3, Pro 600 $5, Pay-as-you-go unlimited." },
+          { status: 402, headers: corsHeaders }
+        );
+      }
+    }
+
+    const conversationId = await ensureConversation({ organizationId, sessionId, customerEmail });
 
     // If we found an email in this turn and conversation had no email, ensure it's saved
     const foundEmailThisTurn = extractEmail(lastUserMsg.content ?? "");

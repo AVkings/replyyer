@@ -62,6 +62,7 @@ export default function AIChatWidget({
   const [pendingAttachment, setPendingAttachment] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [sessionId] = useState(() => `sess_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+  const [conversationId, setConversationId] = useState<string | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -74,6 +75,45 @@ export default function AIChatWidget({
   useEffect(() => {
     if (isOpen) setTimeout(() => inputRef.current?.focus(), 200);
   }, [isOpen]);
+
+  // Poll for admin/human replies — fixes "admin types but customer doesn't see"
+  useEffect(() => {
+    if (!isOpen || !organizationId) return;
+    // Only poll after at least one user message has been sent (so conversation exists)
+    if (messages.filter((m) => m.role === "user").length === 0) return;
+    const interval = setInterval(async () => {
+      try {
+        const headers: Record<string, string> = {};
+        if (apiKey) headers["x-api-key"] = apiKey;
+        // Prefer conversationId if we have it, else sessionId
+        const url = conversationId
+          ? `/api/chat/history?conversationId=${encodeURIComponent(conversationId)}`
+          : `/api/chat/history?sessionId=${encodeURIComponent(sessionId)}&organizationId=${encodeURIComponent(organizationId)}`;
+        const res = await fetch(url, { headers: Object.keys(headers).length ? headers : undefined });
+        const j = await res.json();
+        if (!j.messages || !Array.isArray(j.messages)) return;
+        const serverMsgs: ChatMsg[] = j.messages.map((m: { role: string; content: string; attachment_url: string | null }, idx: number) => ({
+          id: `srv_${idx}`,
+          role: m.role === "user" ? "user" : "ai",
+          content: m.content,
+          attachmentUrl: m.attachment_url,
+        }));
+        setMessages((prev) => {
+          const nonWelcome = prev.filter((m) => m.id !== "welcome" && m.id !== "welcome2");
+          // If server has more messages than local (admin replied), append missing ones
+          if (serverMsgs.length > nonWelcome.length) {
+            const newOnes = serverMsgs.slice(nonWelcome.length).map((m) => ({ ...m, id: `srv_${Date.now()}_${Math.random().toString(36).slice(2, 4)}` }));
+            // Avoid duplicates by content check
+            const filtered = newOnes.filter((n) => !prev.some((p) => p.content === n.content && p.role === n.role));
+            if (filtered.length) return [...prev, ...filtered];
+          }
+          return prev;
+        });
+        if (j.conversationId && !conversationId) setConversationId(j.conversationId);
+      } catch {}
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [isOpen, organizationId, apiKey, sessionId, conversationId, messages]);
 
   const pushToast = (type: Toast["type"], message: string) => {
     const id = Math.random().toString(36).slice(2);
@@ -150,10 +190,12 @@ export default function AIChatWidget({
         success: boolean;
         reply?: string;
         error?: string;
+        conversationId?: string;
         ticketCreated?: { ticketId: string; title: string } | null;
         sources?: { url_source: string | null; similarity: number }[] | null;
       };
       if (!res.ok || !json.success) throw new Error(json.error ?? `Chat failed (${res.status})`);
+      if (json.conversationId) setConversationId(json.conversationId);
       const aiMsg: ChatMsg = {
         id: `a_${Date.now()}`,
         role: "ai",

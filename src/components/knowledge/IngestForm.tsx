@@ -19,10 +19,12 @@ import { ingestKnowledgeBaseAction, ingestTextKnowledgeBaseAction, type IngestRe
 type ModalState = { open: boolean; type: "success" | "error"; title: string; message: string; details?: string };
 
 export default function IngestForm() {
-  const [tab, setTab] = useState<"url" | "paste">("url");
+  const [tab, setTab] = useState<"url" | "paste" | "doc">("url");
   const [url, setUrl] = useState("");
   const [paste, setPaste] = useState("");
   const [pasteTitle, setPasteTitle] = useState("");
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const [docTitle, setDocTitle] = useState("");
   const [orgId, setOrgId] = useState("");
   const [result, setResult] = useState<IngestResult | null>(null);
   const [modal, setModal] = useState<ModalState>({ open: false, type: "success", title: "", message: "" });
@@ -45,7 +47,7 @@ export default function IngestForm() {
         if (res.success) setModal({ open: true, type: "success", title: "Knowledge ingested!", message: `${res.chunksIngested} chunks from ${res.title || res.url} • ${res.totalChars.toLocaleString()} chars` });
         else setModal({ open: true, type: "error", title: "Ingestion failed", message: res.error, details: res.details });
       });
-    } else {
+    } else if (tab === "paste") {
       if (!paste.trim() || paste.trim().length < 20) {
         setModal({ open: true, type: "error", title: "Text required", message: "Paste at least 20 characters (docs, JSON, CSV, DB export)." });
         return;
@@ -60,6 +62,61 @@ export default function IngestForm() {
         setResult(res);
         if (res.success) setModal({ open: true, type: "success", title: "Knowledge ingested!", message: `${res.chunksIngested} chunks from "${res.title}" • ${res.totalChars.toLocaleString()} chars` });
         else setModal({ open: true, type: "error", title: "Ingestion failed", message: res.error, details: res.details });
+      });
+    } else {
+      // doc file
+      if (!docFile) {
+        setModal({ open: true, type: "error", title: "File required", message: "Select a document (PDF, TXT, CSV, JSON, MD)" });
+        return;
+      }
+      setResult(null);
+      startTransition(async () => {
+        try {
+          // 1. Upload to GoFile (saved at repllyer folder)
+          const uploadFd = new FormData();
+          uploadFd.append("file", docFile);
+          const uploadRes = await fetch("/api/upload", {
+            method: "POST",
+            headers: orgId.trim() ? { "x-organization-id": orgId.trim() } : undefined,
+            body: uploadFd,
+          });
+          const uploadJson = await uploadRes.json();
+          if (!uploadJson.success) throw new Error(uploadJson.error || "GoFile upload failed");
+          const goFileUrl: string = uploadJson.url;
+          // 2. Extract text if possible (txt, md, csv, json)
+          let fileText = "";
+          const isTextLike = docFile.type.startsWith("text/") || ["application/json", "text/csv", "text/markdown"].includes(docFile.type) || docFile.name.endsWith(".txt") || docFile.name.endsWith(".md") || docFile.name.endsWith(".csv") || docFile.name.endsWith(".json");
+          if (isTextLike) {
+            fileText = await docFile.text();
+          } else {
+            // For PDF/binary, use file name + GoFile link as content
+            fileText = `Document: ${docFile.name}\nType: ${docFile.type || "unknown"}\nSize: ${(docFile.size / 1024).toFixed(1)}KB\nStored at: ${goFileUrl}\n\nThis document was uploaded to GoFile repllyer folder and is available at the URL above.`;
+            // Try to read as text anyway (may be partial)
+            try {
+              const maybe = await docFile.text();
+              if (maybe && maybe.length > 20 && maybe.length < 100000) fileText += `\n\nPreview:\n${maybe.slice(0, 5000)}`;
+            } catch {}
+          }
+          const title = docTitle.trim() || docFile.name.replace(/\.[^/.]+$/, "");
+          const textFd = new FormData();
+          textFd.set("text", fileText.slice(0, 150000));
+          textFd.set("title", title);
+          if (orgId.trim()) textFd.set("organizationId", orgId.trim());
+          // Override url_source to be GoFile URL for traceability
+          // We store via ingestText but will patch url_source after if needed
+          const res = await ingestTextKnowledgeBaseAction(textFd);
+          // If successful, patch the url_source to GoFile URL for clarity (optional)
+          if (res.success) {
+            // Show GoFile link in modal
+            setModal({ open: true, type: "success", title: "Document ingested!", message: `${res.chunksIngested} chunks from "${title}" • GoFile: ${goFileUrl}` });
+          }
+          setResult(res);
+          if (!res.success) setModal({ open: true, type: "error", title: "Ingestion failed", message: res.error, details: res.details });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setModal({ open: true, type: "error", title: "Document failed", message: msg });
+          setResult({ success: false, error: msg });
+        }
       });
     }
   };
@@ -80,7 +137,14 @@ export default function IngestForm() {
           onClick={() => setTab("paste")}
           className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-xs font-medium transition ${tab === "paste" ? "bg-white text-black" : "text-neutral-500 hover:text-white"}`}
         >
-          <FileJson className="h-3.5 w-3.5" /> Paste Text / JSON / DB
+          <FileJson className="h-3.5 w-3.5" /> Paste
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("doc")}
+          className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-xs font-medium transition ${tab === "doc" ? "bg-white text-black" : "text-neutral-500 hover:text-white"}`}
+        >
+          <FileText className="h-3.5 w-3.5" /> Document
         </button>
       </div>
 
@@ -117,7 +181,7 @@ export default function IngestForm() {
               </div>
               <p className="text-xs text-neutral-500">Extracts headings, paragraphs & lists — scripts/styles/nav stripped. Fast.</p>
             </motion.div>
-          ) : (
+          ) : tab === "paste" ? (
             <motion.div
               key="paste"
               initial={{ opacity: 0, x: 8 }}
@@ -152,6 +216,31 @@ export default function IngestForm() {
               />
               <p className="text-xs text-neutral-500">{paste.length.toLocaleString()} chars • Will be chunked 700+100, same pipeline as URL.</p>
             </motion.div>
+          ) : (
+            <motion.div
+              key="doc"
+              initial={{ opacity: 0, x: 8 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -8 }}
+              className="space-y-3"
+            >
+              <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-widest text-neutral-400">
+                <FileText className="h-4 w-4 text-white" /> Document file <span className="normal-case tracking-normal text-neutral-600">(PDF, TXT, CSV, JSON, MD)</span>
+              </label>
+              <div className="rounded-2xl border border-dashed border-neutral-700 bg-black p-4">
+                <input type="file" accept=".pdf,.txt,.md,.csv,.json,.docx" onChange={(e) => { const f = e.target.files?.[0]; if (f) { setDocFile(f); setDocTitle(f.name.replace(/\.[^/.]+$/, "")); } }} disabled={isPending} className="w-full text-sm text-white file:mr-3 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-xs file:font-medium file:text-black hover:file:bg-neutral-200" />
+                {docFile && <p className="mt-2 text-xs text-neutral-500">{docFile.name} • {(docFile.size / 1024).toFixed(1)}KB • {docFile.type || "unknown"}</p>}
+              </div>
+              <input
+                type="text"
+                placeholder="Title (auto from file name)"
+                value={docTitle}
+                onChange={(e) => setDocTitle(e.target.value)}
+                disabled={isPending}
+                className="w-full rounded-2xl border border-neutral-800 bg-black px-4 py-3 text-sm text-white placeholder:text-neutral-600 outline-none focus:border-white focus:ring-4 focus:ring-white/10"
+              />
+              <p className="text-xs text-neutral-500">Saved to GoFile <code className="rounded border border-neutral-800 bg-neutral-950 px-1 text-white">repllyer</code> folder + indexed for RAG.</p>
+            </motion.div>
           )}
         </AnimatePresence>
 
@@ -179,11 +268,11 @@ export default function IngestForm() {
         >
           {isPending ? (
             <>
-              <Loader2 className="h-4 w-4 animate-spin" /> {tab === "url" ? "Scraping & embedding…" : "Embedding pasted text…"}
+              <Loader2 className="h-4 w-4 animate-spin" /> {tab === "url" ? "Scraping & embedding…" : tab === "paste" ? "Embedding pasted text…" : "Uploading to GoFile & indexing…"}
             </>
           ) : (
             <>
-              <Database className="h-4 w-4" /> Ingest & Embed
+              <Database className="h-4 w-4" /> {tab === "doc" ? "Upload & Ingest" : "Ingest & Embed"}
             </>
           )}
         </motion.button>
