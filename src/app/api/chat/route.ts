@@ -272,6 +272,40 @@ RULES:
       replyContent = "Thanks for reaching out! Could you share a bit more detail so I can help you better?";
     }
 
+    // Fallback ticketing: if AI didn't auto-resolve but offered escalation or KB was empty, create pending_human ticket
+    // This ensures dashboard always shows tickets even when not auto-resolved (fixes "not storing in tickets")
+    if (!ticketCreated) {
+      const needsHuman = /escalate|human agent|don't have|do not have|not able|share.*details/i.test(replyContent);
+      const isFirstExchange = body.messages.length <= 2; // first user message + possible welcome
+      // Check if ticket already exists for this conversation to avoid duplicates per turn
+      const { data: existingTicket } = await admin.from("tickets").select("id").eq("conversation_id", conversationId).limit(1).maybeSingle();
+      if (!existingTicket && (needsHuman || ragChunks.length === 0 || isFirstExchange)) {
+        const fallbackTitle = userContent.slice(0, 80).trim() || "Customer inquiry";
+        // crude priority: login/auth = 4, payment =5, general=2
+        let priority = 3;
+        if (/login|password|auth|unable.*log/i.test(userContent)) priority = 4;
+        if (/payment|refund|billing|charge/i.test(userContent)) priority = 5;
+        if (/hi|hello|hey|thanks/i.test(userContent) && userContent.length < 20) priority = 1;
+        const { data: newTicket, error: ticketErr } = await admin
+          .from("tickets")
+          .insert({
+            conversation_id: conversationId,
+            organization_id: organizationId,
+            title: fallbackTitle.length < 3 ? "Support request" : fallbackTitle,
+            ai_summary: replyContent.slice(0, 500),
+            priority_level: priority,
+            status: "pending_human",
+          })
+          .select("id")
+          .single();
+        if (!ticketErr && newTicket) {
+          ticketCreated = { ticketId: newTicket.id, title: fallbackTitle };
+          // mark conversation as needing human
+          await admin.from("conversations").update({ status: "escalated" }).eq("id", conversationId);
+        }
+      }
+    }
+
     // Persist AI message
     await admin.from("messages").insert({
       conversation_id: conversationId,
