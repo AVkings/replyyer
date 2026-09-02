@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadToGoFile } from "@/lib/gofile/client";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 /**
  * POST /api/upload
@@ -28,7 +29,43 @@ export async function OPTIONS() {
   });
 }
 
+async function verifyUploadApiKey(req: NextRequest): Promise<{ valid: boolean; orgId?: string; error?: string }> {
+  const apiKey = req.headers.get("x-api-key")?.trim() || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() || null;
+  const orgIdHeader = req.headers.get("x-organization-id")?.trim() || req.headers.get("x-org-id")?.trim() || null;
+  const urlOrg = req.nextUrl.searchParams.get("organizationId") || req.nextUrl.searchParams.get("organization_id");
+  const orgId = orgIdHeader || urlOrg;
+  if (!apiKey) return { valid: false, error: "Missing x-api-key header — provide your organization api_key" };
+  const admin = createSupabaseAdminClient();
+  if (orgId) {
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRe.test(orgId)) return { valid: false, error: "Invalid organizationId" };
+    const { data } = await admin.from("organizations").select("id").eq("id", orgId).eq("api_key", apiKey).maybeSingle();
+    if (!data) return { valid: false, error: "Invalid API key for this organizationId" };
+    return { valid: true, orgId };
+  } else {
+    const { data } = await admin.from("organizations").select("id").eq("api_key", apiKey).maybeSingle();
+    if (!data) return { valid: false, error: "Invalid API key" };
+    return { valid: true, orgId: data.id };
+  }
+}
+
 export async function POST(req: NextRequest) {
+  // Strict API key check — must provide x-api-key (and optionally x-organization-id)
+  // Allow dashboard session as fallback
+  let auth = await verifyUploadApiKey(req);
+  if (!auth.valid) {
+    // Try Supabase session (dashboard internal)
+    try {
+      const { createSupabaseServerClient } = await import("@/lib/supabase/server");
+      const supabase = await createSupabaseServerClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) auth = { valid: true, orgId: auth.orgId };
+      else return NextResponse.json({ success: false, error: auth.error ?? "Unauthorized — invalid API key" }, { status: 401, headers: corsHeaders });
+    } catch {
+      return NextResponse.json({ success: false, error: auth.error ?? "Unauthorized — invalid API key" }, { status: 401, headers: corsHeaders });
+    }
+  }
+
   try {
     const formData = await req.formData();
     const file = formData.get("file");

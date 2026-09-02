@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getKiraClient, KIRA_MODEL } from "@/lib/kira/client";
 import { retrieveRelevantChunks, formatChunksForPrompt } from "@/lib/knowledge/retrieve";
 import { logResolvedTicketTool, handleLogResolvedTicket, parseToolArgs } from "@/lib/chat/tools";
@@ -63,6 +64,13 @@ function isGreetingOnly(text: string): boolean {
   return /^(hi|hey|hello|hey there|hola|hai|yo|sup|howdy|good\s*(morning|afternoon|evening)|thanks|thank you|ok|okay|bye|goodbye)[\s!.]*$/i.test(t);
 }
 
+async function verifyApiKey(organizationId: string, providedKey: string | null): Promise<boolean> {
+  if (!providedKey) return false;
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin.from("organizations").select("id").eq("id", organizationId).eq("api_key", providedKey).maybeSingle();
+  return !!data;
+}
+
 async function ensureOrganizationId(requested?: string): Promise<string> {
   const admin = createSupabaseAdminClient();
   if (requested) {
@@ -106,6 +114,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "No user message found" }, { status: 400, headers: corsHeaders });
     }
     const rawOrg = resolveOrgId(body);
+    // --- API KEY VERIFICATION (strict for widget, but allow dashboard session) ---
+    const providedApiKey =
+      req.headers.get("x-api-key")?.trim() ||
+      req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ||
+      (body as unknown as { api_key?: string; apiKey?: string }).api_key ||
+      (body as unknown as { apiKey?: string }).apiKey ||
+      null;
+
+    if (!rawOrg) {
+      return NextResponse.json({ success: false, error: "Missing organizationId — API key verification requires organizationId" }, { status: 401, headers: corsHeaders });
+    }
+    if (!providedApiKey) {
+      // Allow dashboard authenticated users (Supabase session) without api_key for internal use
+      try {
+        const supabase = await createSupabaseServerClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          return NextResponse.json({ success: false, error: "Missing x-api-key header — provide your organization api_key" }, { status: 401, headers: corsHeaders });
+        }
+      } catch {
+        return NextResponse.json({ success: false, error: "Missing x-api-key header — provide your organization api_key" }, { status: 401, headers: corsHeaders });
+      }
+    } else {
+      const isValidKey = await verifyApiKey(rawOrg, providedApiKey);
+      if (!isValidKey) {
+        return NextResponse.json({ success: false, error: "Invalid API key for this organizationId" }, { status: 401, headers: corsHeaders });
+      }
+    }
+
     const attachmentUrl = resolveAttachment(body);
     const sessionId = resolveSessionId(body);
     let customerEmail = body.customerEmail ?? body.customer_email ?? undefined;

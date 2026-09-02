@@ -183,7 +183,7 @@ document.getElementById("fileInput").addEventListener("change", async (e)=>{
   const fd = new FormData();
   fd.append("file", file);
   try{
-    const res = await fetch(API_UPLOAD, { method:"POST", body: fd });
+    const res = await fetch(API_UPLOAD, { method:"POST", headers: { "x-api-key": API_KEY, "x-organization-id": ORG_ID }, body: fd });
     const j = await res.json();
     if(!j.success) throw new Error(j.error||"Upload failed");
     pendingAttach = j.url;

@@ -30,6 +30,7 @@ type Toast = { id: string; type: "error" | "success" | "info"; message: string }
 
 type AIChatWidgetProps = {
   organizationId?: string;
+  apiKey?: string;
   customerEmail?: string;
   defaultOpen?: boolean;
   variant?: "floating" | "inline";
@@ -39,6 +40,7 @@ type AIChatWidgetProps = {
 
 export default function AIChatWidget({
   organizationId,
+  apiKey,
   customerEmail,
   defaultOpen = true,
   variant = "floating",
@@ -91,7 +93,10 @@ export default function AIChatWidget({
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      const headers: Record<string, string> = {};
+      if (apiKey) headers["x-api-key"] = apiKey;
+      if (organizationId) headers["x-organization-id"] = organizationId;
+      const res = await fetch("/api/upload", { method: "POST", headers: Object.keys(headers).length ? headers : undefined, body: fd });
       const json = (await res.json()) as { success: boolean; url?: string; error?: string };
       if (!res.ok || !json.success || !json.url) throw new Error(json.error ?? "Upload failed");
       setPendingAttachment(json.url);
@@ -125,9 +130,11 @@ export default function AIChatWidget({
     if (apiMessages.length === 0) apiMessages.push({ role: "user", content: trimmed, attachment_url: pendingAttachment });
 
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (apiKey) headers["x-api-key"] = apiKey;
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           messages: apiMessages,
           organizationId,
