@@ -186,7 +186,8 @@ export async function POST(req: NextRequest) {
       contextBlock = formatChunksForPrompt(ragChunks);
     } catch (e) { console.warn("[chat] RAG retrieve failed:", e); }
 
-    // Strict system prompt: email first, no fake auto-resolve for greetings, continue chat if not solved
+    // Balanced prompt: answer first, then ask for email/satisfaction — no blocking
+    const userMessagesCount = body.messages.filter((m) => m.role === "user").length;
     const systemPrompt = `You are Repllyer — an autonomous AI customer support agent.
 You help customers using ONLY the knowledge base context provided. Be concise, friendly, and accurate.
 
@@ -194,13 +195,16 @@ KNOWLEDGE BASE CONTEXT:
 ${contextBlock}
 
 CRITICAL RULES:
-- TASK 1 — EMAIL CAPTURE (HIGHEST PRIORITY): At the start of EVERY new conversation, you MUST ask for the customer's email and DO NOT proceed with troubleshooting until you have it. Be persistent but friendly. If customer_email is already known: ${convStatus?.customer_email ?? "unknown"}, acknowledge it. If missing, ask: "Could you share your email so I can assist and follow up?" — and do NOT mark anything as resolved until email is captured.
+- ANSWER FIRST: Always answer the user's question first using the context. THEN, at the end of your reply, add a short P.S.: "P.S. Could you share your email for follow-up? Also, is your issue resolved? Please reply yes/no."
+- Do NOT block troubleshooting waiting for email. If customer_email is known: ${convStatus?.customer_email ?? "unknown"}, just acknowledge it briefly at the end. If missing, ask for email as P.S., not as the whole reply.
 - If the context does not contain the answer, say you don't have that information and offer to escalate to a human. Do NOT hallucinate.
 - Use context verbatim when relevant; cite source URL if you use it.
 - If the user uploaded an attachment (image/file link), acknowledge it and consider it in your answer.
-- AUTO-RESOLVE TOOL: Only call log_resolved_ticket when you are 100% certain the user's real issue (not a greeting like "hi", "hey", "hello", "thanks") is fully solved with a concrete solution from the context AND the user has not asked a follow-up. For greetings, short thanks, or vague "hi", NEVER call the tool — just ask how you can help and ask for email if missing. The chat must CONTINUE if not solved.
+- AUTO-RESOLVE TOOL: Only call log_resolved_ticket when the user explicitly confirms satisfaction (e.g., "yes", "yes it is resolved", "thanks it worked", "solved") AND you have previously provided a concrete solution from the context. For greetings ("hi", "hey", "hello", "thanks") or when the user has not yet said yes, NEVER call the tool — just answer and ask the P.S. The chat must CONTINUE if not solved.
+- If user says "no", "not resolved", or asks a follow-up, do NOT call the tool — continue helping or offer human escalation.
 - Priority: 1=trivial (greetings), 2=low, 3=medium, 4=high, 5=critical (security/data loss/outage).
-- Keep tone warm, modern, helpful. If escalated, AI should not reply — human will take over.`;
+- Keep tone warm, modern, helpful. If escalated, AI should not reply — human will take over.
+- Current conversation turn: ${userMessagesCount} user message(s). Needs email: ${needsEmail ? "yes" : "no"}.`;
 
     // If escalated, we still want to persist user message but return a human-takeover notice instead of AI
     let replyContent: string | null = null;
@@ -209,11 +213,8 @@ CRITICAL RULES:
     if (isEscalated) {
       replyContent = "A human agent has taken over this conversation. They will reply shortly — please wait.";
     } else {
-      // For pure greetings, short-circuit: don't even call LLM for tool, just ask for email/issue
-      const greetingOnly = isGreetingOnly(userContent);
-      if (greetingOnly && needsEmail) {
-        replyContent = "Hi there! 👋 Could you share your email so I can help you properly? And let me know what issue you're facing — I'm here to help!";
-      } else {
+      // All messages go through LLM — greetings will be answered naturally via prompt (no blocking)
+      {
         const kiraMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [{ role: "system", content: systemPrompt }];
         for (const m of body.messages) {
           if (m.role === "system") continue;
@@ -263,24 +264,43 @@ CRITICAL RULES:
 
     if (!replyContent || !replyContent.trim()) replyContent = "Thanks for reaching out! Could you share your email and a bit more detail so I can help you better?";
 
-    // Fallback ticketing: only if not greeting and not already ticketed
+    // Fallback ticketing: only after meaningful exchange, not for greetings, and only when truly needed
     if (!ticketCreated) {
       const isGreeting = isGreetingOnly(userContent);
-      if (!isGreeting) {
-        const needsHuman = /escalate|human agent|don't have|do not have|not able|share.*details|email/i.test(replyContent) || ragChunks.length === 0;
+      const userSaidYes = /^(yes|yep|yeah|yes.*resolved|solved|it.*worked|thanks.*works|perfect|resolved|done).*$/i.test(userContent.trim());
+      const userSaidNo = /^(no|not.*resolved|still.*(not|issue|problem)|not.*working|need.*human|escalate).*$/i.test(userContent.trim());
+      // Satisfaction detected: user said yes after a solution -> auto_resolved
+      if (userSaidYes && !isGreeting) {
         const { data: existingTicket } = await admin.from("tickets").select("id").eq("conversation_id", conversationId).limit(1).maybeSingle();
-        if (!existingTicket && needsHuman) {
-          const fallbackTitle = userContent.slice(0, 80).trim() || "Customer inquiry";
+        if (!existingTicket) {
+          const title = body.messages.filter(m=>m.role==="user").slice(-2)[0]?.content?.slice(0,80) || userContent.slice(0,80) || "Resolved inquiry";
           let priority = 3;
-          if (/login|password|auth|unable.*log/i.test(userContent)) priority = 4;
-          if (/payment|refund|billing|charge/i.test(userContent)) priority = 5;
-          const { data: newTicket } = await admin.from("tickets").insert({ conversation_id: conversationId, organization_id: organizationId, title: fallbackTitle.length < 3 ? "Support request" : fallbackTitle, ai_summary: replyContent.slice(0, 500), priority_level: priority, status: "pending_human" }).select("id").single();
+          if (/login|password|auth/i.test(title)) priority = 4;
+          if (/payment|refund|billing/i.test(title)) priority = 5;
+          const { data: newTicket } = await admin.from("tickets").insert({ conversation_id: conversationId, organization_id: organizationId, title: title.trim(), ai_summary: `User confirmed resolved: "${userContent}" — AI reply: "${replyContent.slice(0,300)}"`, priority_level: priority, status: "auto_resolved" }).select("id").single();
           if (newTicket) {
-            ticketCreated = { ticketId: newTicket.id, title: fallbackTitle };
-            await admin.from("conversations").update({ status: "escalated" }).eq("id", conversationId);
+            ticketCreated = { ticketId: newTicket.id, title: title.trim() };
+            await admin.from("conversations").update({ status: "resolved" }).eq("id", conversationId);
+          }
+        }
+      } else if (!isGreeting && (userSaidNo || /escalate|human agent|don't have.*knowledge|not able to help/i.test(replyContent))) {
+        // Only create pending_human after at least 2 user messages, not on first greeting
+        if (userMessagesCount >= 2) {
+          const { data: existingTicket } = await admin.from("tickets").select("id").eq("conversation_id", conversationId).limit(1).maybeSingle();
+          if (!existingTicket) {
+            const fallbackTitle = userContent.slice(0, 80).trim() || "Customer inquiry";
+            let priority = 3;
+            if (/login|password|auth|unable.*log/i.test(userContent)) priority = 4;
+            if (/payment|refund|billing|charge/i.test(userContent)) priority = 5;
+            const { data: newTicket } = await admin.from("tickets").insert({ conversation_id: conversationId, organization_id: organizationId, title: fallbackTitle.length < 3 ? "Support request" : fallbackTitle, ai_summary: replyContent.slice(0, 500), priority_level: priority, status: "pending_human" }).select("id").single();
+            if (newTicket) {
+              ticketCreated = { ticketId: newTicket.id, title: fallbackTitle };
+              await admin.from("conversations").update({ status: "escalated" }).eq("id", conversationId);
+            }
           }
         }
       }
+      // Otherwise: chat continues, no ticket yet — no auto escalation
     }
 
     await admin.from("messages").insert({ conversation_id: conversationId, role: "ai", content: replyContent, attachment_url: null });
