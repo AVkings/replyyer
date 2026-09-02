@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Repllyer — Customer Support Widget Test (Local HTML)</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;flex-direction:column}
+  .grid{position:fixed;inset:0;pointer-events:none;background:linear-gradient(to right,rgba(255,255,255,.06) 1px,transparent 1px),linear-gradient(to bottom,rgba(255,255,255,.06) 1px,transparent 1px);background-size:48px 48px;mask:linear-gradient(to bottom,black,transparent)}
+  header{position:sticky;top:0;z-index:10;border-bottom:1px solid #262626;background:rgba(0,0,0,.8);backdrop-filter:blur(12px);padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+  .brand{display:flex;align-items:center;gap:10px}
+  .logo{width:32px;height:32px;border-radius:10px;background:#fff;color:#000;display:grid;place-items:center;font-weight:700;font-size:14px}
+  .badge{border:1px solid #262626;background:#0a0a0a;color:#a3a3a3;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:4px 8px;border-radius:999px}
+  .wrap{position:relative;max-width:1100px;margin:0 auto;width:100%;padding:32px 24px;display:grid;gap:24px;grid-template-columns:1fr 380px}
+  @media(max-width:860px){.wrap{grid-template-columns:1fr}}
+  .card{border:1px solid #262626;background:#0a0a0a;border-radius:24px;padding:20px}
+  .card h2{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:#a3a3a3;margin-bottom:12px}
+  .hero h1{font-size:28px;letter-spacing:-.02em;line-height:1.1}
+  .hero p{color:#a3a3a3;font-size:14px;line-height:1.6;margin-top:10px}
+  .code{margin-top:12px;background:#000;border:1px solid #262626;border-radius:12px;padding:12px;font-family:ui-monospace,monospace;font-size:11px;color:#d4d4d4;overflow:auto}
+  /* Chat container — B&W premium */
+  .chat{border:1px solid #262626;background:#000;border-radius:28px;overflow:hidden;display:flex;flex-direction:column;height:560px}
+  .chat-head{border-bottom:1px solid #262626;background:#000;padding:16px 18px;display:flex;align-items:center;gap:12px}
+  .avatar{width:36px;height:36px;border-radius:12px;background:#fff;color:#000;display:grid;place-items:center;font-size:14px}
+  .chat-head b{font-size:14px}
+  .chat-head span{font-size:12px;color:#737373;display:flex;align-items:center;gap:6px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#fff;animation:pulse 1.5s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  .msgs{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px;background:#000}
+  .bubble{max-width:78%;padding:12px 14px;border-radius:18px;font-size:14px;line-height:1.5}
+  .ai{align-self:flex-start;border:1px solid #262626;background:#0a0a0a;color:#fff;border-bottom-left-radius:6px}
+  .user{align-self:flex-end;background:#fff;color:#000;border-bottom-right-radius:6px}
+  .meta{font-size:11px;color:#525252;margin-top:4px}
+  .ai .meta{color:#737373}
+  .inputbar{border-top:1px solid #262626;background:#000;padding:12px;display:flex;gap:8px;align-items:center}
+  .inputbar input{flex:1;border:1px solid #262626;background:#0a0a0a;color:#fff;border-radius:999px;padding:12px 16px;outline:none;font-size:14px}
+  .inputbar input:focus{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.1)}
+  .btn{width:40px;height:40px;border-radius:12px;border:0;background:#fff;color:#000;display:grid;place-items:center;cursor:pointer}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .attach{width:40px;height:40px;border-radius:12px;border:1px solid #262626;background:#000;color:#a3a3a3;display:grid;place-items:center;cursor:pointer}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#fff;color:#000;padding:10px 16px;border-radius:999px;font-size:13px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.4);display:none}
+  .toast.show{display:block;animation:pop .2s}
+  @keyframes pop{from{transform:translateX(-50%) scale(.95)}to{transform:translateX(-50%) scale(1)}}
+  .pill{border:1px solid #262626;background:#000;color:#a3a3a3;border-radius:999px;padding:6px 10px;font-size:11px}
+</style>
+</head>
+<body>
+<div class="grid"></div>
+<header>
+  <div class="brand">
+    <div class="logo">R</div>
+    <div>
+      <div style="font-weight:600;font-size:14px;letter-spacing:-.02em">Repllyer</div>
+      <div style="font-size:11px;color:#737373">Customer Support — Local HTML Test</div>
+    </div>
+    <span class="badge">file:// CORS test</span>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span class="pill" id="apiStatus">API: checking…</span>
+    <a href="https://github.com/AVkings/replyyer" target="_blank" style="color:#fff;text-decoration:none;border:1px solid #262626;background:#0a0a0a;padding:8px 14px;border-radius:999px;font-size:12px">GitHub</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- Left: info -->
+  <div>
+    <div class="card hero">
+      <h2>Local HTML Container</h2>
+      <h1>Test the chat widget<br>from a <span style="color:#737373">standalone file</span></h1>
+      <p>This file is <b style="color:#fff">not</b> served by Next.js. Open it via <code style="background:#000;border:1px solid #262626;padding:2px 6px;border-radius:6px">file:///E:/repllyer/public/widget-test.html</code> or double-click. It hits your Vercel API <code style="background:#000;border:1px solid #262626;padding:2px 6px;border-radius:6px">https://replyyer.vercel.app/api/chat</code> — CORS is `*` so it works.</p>
+      <div class="code" id="codeBlock">fetch("https://replyyer.vercel.app/api/chat", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    messages: [{ role: "user", content: "Hello" }],
+    organizationId: "optional-uuid"
+  })
+})</div>
+      <p style="margin-top:12px;font-size:12px;color:#737373">If you see <b style="color:#fff">Failed to fetch</b>, check that <code style="background:#000;border:1px solid #262626;padding:2px 6px;border-radius:6px">Access-Control-Allow-Origin: *</code> is returned (DevTools → Network → OPTIONS 204).</p>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>How this container works</h2>
+      <ul style="color:#a3a3a3;font-size:13px;line-height:1.7;list-style:none">
+        <li>• No iframe — direct <code style="background:#000;border:1px solid #262626;padding:2px 6px;border-radius:6px">fetch</code> to <code style="color:#fff">/api/chat</code> (RAG + tool calling) and <code style="color:#fff">/api/upload</code> (GoFile)</li>
+        <li>• Persists to Supabase <code style="color:#fff">conversations → messages → tickets</code> (check <code style="color:#fff">/dashboard/tickets</code>)</li>
+        <li>• Embed same logic in any site: copy the <code style="color:#fff">fetch</code> block above</li>
+        <li>• For prod embed via iframe: <code style="background:#000;border:1px solid #262626;padding:2px 6px;border-radius:6px">&lt;iframe src="https://replyyer.vercel.app/chat-demo"&gt;&lt;/iframe&gt;</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Right: chat container -->
+  <div class="chat" id="chatContainer">
+    <div class="chat-head">
+      <div class="avatar">💬</div>
+      <div>
+        <div style="font-weight:600;font-size:14px">Repllyer Support</div>
+        <span><span class="dot"></span> AI • Replies instantly • CORS *</span>
+      </div>
+      <button onclick="clearChat()" style="margin-left:auto;background:#0a0a0a;border:1px solid #262626;color:#fff;border-radius:999px;padding:6px 10px;font-size:12px;cursor:pointer">Clear</button>
+    </div>
+    <div class="msgs" id="msgs">
+      <div class="bubble ai">Hi! I'm Repllyer, your AI support. Ask anything or attach a screenshot. This is a <b>local HTML container</b> → hits <code>replyyer.vercel.app/api/chat</code> with CORS *</div>
+    </div>
+    <div style="padding:8px 12px;border-top:1px solid #1a1a1a;background:#0a0a0a;display:none" id="attachPreview">
+      <div style="font-size:12px;color:#a3a3a3;display:flex;justify-content:space-between;align-items:center">
+        <span id="attachName">attachment</span>
+        <button onclick="clearAttach()" style="background:none;border:0;color:#fff;cursor:pointer">✕</button>
+      </div>
+      <div style="font-size:11px;color:#525252;word-break:break-all" id="attachUrl"></div>
+    </div>
+    <div class="inputbar">
+      <label class="attach" title="Attach file">📎<input type="file" id="fileInput" accept="image/*,.pdf,.txt" hidden></label>
+      <input id="input" placeholder="Ask anything…" onkeydown="if(event.key==='Enter') send()" />
+      <button class="btn" id="sendBtn" onclick="send()">➤</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API_CHAT = "https://replyyer.vercel.app/api/chat";
+const API_UPLOAD = "https://replyyer.vercel.app/api/upload";
+// For local dev, change to http://localhost:3000/api/chat
+
+let pendingAttach = null;
+let sessionId = "sess_" + Date.now() + "_" + Math.random().toString(36).slice(2,6);
+const msgsEl = document.getElementById("msgs");
+const inputEl = document.getElementById("input");
+const toastEl = document.getElementById("toast");
+const apiStatus = document.getElementById("apiStatus");
+const attachPreview = document.getElementById("attachPreview");
+
+function toast(msg, ok=true){
+  toastEl.textContent = msg;
+  toastEl.style.background = ok ? "#fff" : "#0a0a0a";
+  toastEl.style.color = ok ? "#000" : "#fff";
+  toastEl.style.border = ok ? "0" : "1px solid #262626";
+  toastEl.classList.add("show");
+  setTimeout(()=>toastEl.classList.remove("show"),3000);
+}
+
+function addMsg(role, text, extra=""){
+  const wrap = document.createElement("div");
+  wrap.style.display="flex";
+  wrap.style.flexDirection="column";
+  wrap.style.alignItems = role==="user" ? "flex-end" : "flex-start";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble " + (role==="user" ? "user":"ai");
+  bubble.innerHTML = text.replace(/\n/g,"<br>") + (extra||"");
+  const meta = document.createElement("div");
+  meta.className="meta";
+  meta.textContent = role==="user" ? "You" : "Repllyer • " + new Date().toLocaleTimeString();
+  wrap.appendChild(bubble);
+  wrap.appendChild(meta);
+  msgsEl.appendChild(wrap);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+
+function clearChat(){
+  msgsEl.innerHTML='<div class="bubble ai">Chat cleared. How can I help?</div>';
+  pendingAttach=null;
+  attachPreview.style.display="none";
+}
+
+function clearAttach(){ pendingAttach=null; attachPreview.style.display="none"; }
+
+document.getElementById("fileInput").addEventListener("change", async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  e.target.value="";
+  if(file.size > 10*1024*1024) return toast("File too large >10MB", false);
+  toast("Uploading "+file.name+" …");
+  const fd = new FormData();
+  fd.append("file", file);
+  try{
+    const res = await fetch(API_UPLOAD, { method:"POST", body: fd });
+    const j = await res.json();
+    if(!j.success) throw new Error(j.error||"Upload failed");
+    pendingAttach = j.url;
+    document.getElementById("attachName").textContent = file.name;
+    document.getElementById("attachUrl").textContent = j.url;
+    attachPreview.style.display="block";
+    toast("Uploaded: "+file.name);
+  }catch(err){ toast(err.message, false); }
+});
+
+async function send(){
+  const text = inputEl.value.trim();
+  if(!text) return;
+  inputEl.value="";
+  addMsg("user", text + (pendingAttach ? `<div style="margin-top:6px;font-size:11px;opacity:.7">📎 ${pendingAttach}</div>` : ""));
+  const payload = {
+    messages: [{ role:"user", content: text }],
+    sessionId,
+    attachment_url: pendingAttach
+  };
+  pendingAttach=null;
+  attachPreview.style.display="none";
+  document.getElementById("sendBtn").disabled=true;
+  const loading = document.createElement("div");
+  loading.className="bubble ai";
+  loading.textContent="… thinking";
+  loading.id="loading";
+  msgsEl.appendChild(loading);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+  try{
+    const res = await fetch(API_CHAT, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(payload)
+    });
+    const j = await res.json();
+    document.getElementById("loading")?.remove();
+    if(!j.success) throw new Error(j.error||"Chat failed");
+    let extra="";
+    if(j.ticketCreated) extra = `<div style="margin-top:8px;border:1px solid #262626;background:#000;padding:8px;border-radius:10px;font-size:11px">✓ Auto-resolved ticket <code>${j.ticketCreated.ticketId.slice(0,8)}</code> ${j.ticketCreated.title}</div>`;
+    if(j.sources && j.sources.length) extra += `<div style="margin-top:6px;font-size:11px;opacity:.6">Sources: ${j.sources.map(s=>s.url_source||"paste").join(", ")}</div>`;
+    addMsg("ai", j.reply, extra);
+    if(j.ticketCreated) toast("Ticket auto-resolved: "+j.ticketCreated.title);
+  }catch(err){
+    document.getElementById("loading")?.remove();
+    addMsg("ai", "Error: "+ (err.message||String(err)) + " — check CORS (OPTIONS should be 204 with *). Try opening DevTools → Network.");
+    toast("Failed to fetch — CORS?", false);
+  }finally{
+    document.getElementById("sendBtn").disabled=false;
+    inputEl.focus();
+  }
+}
+
+// Check CORS on load
+fetch(API_CHAT, { method:"GET" })
+  .then(r=>{
+    const origin = r.headers.get("access-control-allow-origin");
+    apiStatus.textContent = origin ? `API: CORS ${origin}` : "API: no CORS header";
+    apiStatus.style.color = origin==="*" ? "#86efac" : "#fca5a5";
+  })
+  .catch(()=>{ apiStatus.textContent="API: unreachable"; apiStatus.style.color="#fca5a5"; });
+</script>
+</body>
+</html>
