@@ -71,12 +71,16 @@
       <p>This file is <b style="color:#fff">not</b> served by Next.js. Open it via <code style="background:#000;border:1px solid #262626;padding:2px 6px;border-radius:6px">file:///E:/repllyer/public/widget-test.html</code> or double-click. It hits your Vercel API <code style="background:#000;border:1px solid #262626;padding:2px 6px;border-radius:6px">https://replyyer.vercel.app/api/chat</code> — CORS is `*` so it works.</p>
       <div class="code" id="codeBlock">fetch("https://replyyer.vercel.app/api/chat", {
   method: "POST",
-  headers: { "Content-Type": "application/json" },
+  headers: { 
+    "Content-Type": "application/json",
+    "x-api-key": "467d98266aac4ce585b7049e9f469125d25b8594a7e8440fb698f902cf810fb8"
+  },
   body: JSON.stringify({
     messages: [{ role: "user", content: "Hello" }],
-    organizationId: "optional-uuid"
+    organizationId: "0bb77f3b-a2d8-4401-8590-624f54194a81"
   })
 })</div>
+      <div class="code" style="margin-top:8px">Org ID: 0bb77f3b-a2d8-4401-8590-624f54194a81<br>API Key: 467d98266aac4ce585b7049e9f469125d25b8594a7e8440fb698f902cf810fb8</div>
       <p style="margin-top:12px;font-size:12px;color:#737373">If you see <b style="color:#fff">Failed to fetch</b>, check that <code style="background:#000;border:1px solid #262626;padding:2px 6px;border-radius:6px">Access-Control-Allow-Origin: *</code> is returned (DevTools → Network → OPTIONS 204).</p>
     </div>
 
@@ -124,6 +128,8 @@
 <script>
 const API_CHAT = "https://replyyer.vercel.app/api/chat";
 const API_UPLOAD = "https://replyyer.vercel.app/api/upload";
+const ORG_ID = "0bb77f3b-a2d8-4401-8590-624f54194a81";
+const API_KEY = "467d98266aac4ce585b7049e9f469125d25b8594a7e8440fb698f902cf810fb8";
 // For local dev, change to http://localhost:3000/api/chat
 
 let pendingAttach = null;
@@ -195,6 +201,7 @@ async function send(){
   addMsg("user", text + (pendingAttach ? `<div style="margin-top:6px;font-size:11px;opacity:.7">📎 ${pendingAttach}</div>` : ""));
   const payload = {
     messages: [{ role:"user", content: text }],
+    organizationId: ORG_ID,
     sessionId,
     attachment_url: pendingAttach
   };
@@ -210,7 +217,7 @@ async function send(){
   try{
     const res = await fetch(API_CHAT, {
       method:"POST",
-      headers:{ "Content-Type":"application/json" },
+      headers:{ "Content-Type":"application/json", "x-api-key": API_KEY },
       body: JSON.stringify(payload)
     });
     const j = await res.json();
