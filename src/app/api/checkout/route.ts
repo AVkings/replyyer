@@ -25,12 +25,14 @@ export async function POST(req: NextRequest) {
 
   if (coupon) {
     const code = String(coupon).trim().toUpperCase();
-    const { data: c } = await service.from("coupons").select("id, code, percent, max_uses, uses, active, expires_at").eq("code", code).maybeSingle();
+    const { data: c } = await service.from("coupons").select("id, code, percent, amount_off_paise, max_uses, uses, active, expires_at").eq("code", code).maybeSingle() as { data: { id: string; code: string; percent: number | null; amount_off_paise: number | null; max_uses: number | null; uses: number; active: boolean; expires_at: string | null } | null };
     if (!c) return NextResponse.json({ error: "invalid coupon" }, { status: 400 });
     if (!c.active) return NextResponse.json({ error: "coupon inactive" }, { status: 400 });
     if (c.expires_at && new Date(c.expires_at).getTime() < Date.now()) return NextResponse.json({ error: "coupon expired" }, { status: 400 });
     if (c.max_uses && c.uses >= c.max_uses) return NextResponse.json({ error: "coupon fully redeemed" }, { status: 400 });
-    discount = Math.round((amount * c.percent) / 100);
+    if (c.amount_off_paise != null) discount = c.amount_off_paise;
+    else if (c.percent != null) discount = Math.round((amount * c.percent) / 100);
+    else discount = 0;
     amount = amount - discount;
     if (amount < 100) amount = 100; // min ₹1
     appliedCoupon = c.code;

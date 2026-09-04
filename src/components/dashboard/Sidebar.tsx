@@ -9,6 +9,8 @@ const nav = [
   { href: "/dashboard/knowledge", label: "Knowledge", icon: "≡" },
   { href: "/dashboard/billing", label: "Billing & Credits", icon: "₹" },
   { href: "/dashboard/settings", label: "Settings", icon: "⚙" },
+  { href: "/test", label: "Test bot", icon: "▷" },
+  { href: "/onboarding", label: "Onboarding", icon: "✦" },
 ];
 
 export function Sidebar() {

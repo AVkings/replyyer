@@ -29,19 +29,20 @@ export default function Home() {
                 <span className="h-3 w-3 rounded-full bg-zinc-700" /><span className="h-3 w-3 rounded-full bg-zinc-700" /><span className="h-3 w-3 rounded-full bg-zinc-700" />
                 <span className="ml-2 text-xs font-mono text-zinc-500">curl — session + chat</span>
               </div>
-              <pre className="overflow-x-auto p-5 text-xs leading-5 text-zinc-300">
-{`# 1. init session (collect name+email once per page)
+              <motion.pre initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }} className="overflow-x-auto p-5 text-xs leading-5 text-zinc-300">
+{`# Base URL: https://repllyer.vercel.app
+# 1. init session — no email needed (bot will ask, or treated as guest)
 curl -X POST https://repllyer.vercel.app/api/v1/session/init \\
   -H "x-api-key: rply_live_..." -H "Content-Type: application/json" \\
-  -d '{"name":"Aarav","email":"aarav@example.com"}'
-# -> { "session_id": "uuid", "credits_remaining": 177 }
+  -d '{}'
+# -> { "session_id": "uuid", "credits_remaining": 177, "guest": true }
 
 # 2. chat
 curl -X POST https://repllyer.vercel.app/api/v1/chat \\
   -H "x-api-key: rply_live_..." \\
   -d '{"session_id":"uuid","message":"refund not received?"}'
 # -> { "status":"human_required","priority":"urgent","topic":"refund" }`}
-              </pre>
+              </motion.pre>
             </div>
           </motion.div>
         </div>
@@ -51,11 +52,11 @@ curl -X POST https://repllyer.vercel.app/api/v1/chat \\
       <section className="mx-auto max-w-6xl px-6 py-16">
         <div className="grid gap-6 md:grid-cols-3">
           {[
-            { n: "01", t: "Tell us what you sell", d: "Paste description + upload PDFs (stored on Gofile). We build your knowledge base." },
+            { n: "01", t: "Tell us what you sell", d: "Paste description + upload PDFs. We build your private knowledge base securely." },
             { n: "02", t: "Drop in 1 API key", d: "x-api-key header. We verify, check credits, create session on page load." },
-            { n: "03", t: "Auto or human", d: "kiraai.vn answers + classifies priority/topic. Unsolvable → your dashboard queue." },
+            { n: "03", t: "Auto or human", d: "AI answers + classifies priority/topic. Unsolvable → your dashboard queue." },
           ].map((s, i) => (
-            <motion.div key={s.n} initial={{ opacity: 0, y: 10 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: i * 0.1 }} className="rounded-2xl border border-zinc-200 bg-white p-6">
+            <motion.div key={s.n} initial={{ opacity: 0, y: 10 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: i * 0.1 }} whileHover={{ y: -4 }} className="rounded-2xl border border-zinc-200 bg-white p-6">
               <div className="text-xs font-mono text-zinc-400">{s.n}</div>
               <div className="mt-2 text-sm font-semibold">{s.t}</div>
               <div className="mt-1 text-sm leading-5 text-zinc-600">{s.d}</div>
@@ -90,10 +91,10 @@ curl -X POST https://repllyer.vercel.app/api/v1/chat \\
         <h2 className="text-lg font-semibold">Start free, pay as you grow</h2>
         <div className="mt-6 grid gap-6 md:grid-cols-4">
           {[
-            { name: "Free", price: "₹0", sub: "180 msgs", cta: "Get started", href: "/signup", feat: ["1 API key", "Gofile KB", "Human queue"] },
-            { name: "500", price: "₹499", sub: "one-time pack", cta: "Buy via Razorpay", href: "/dashboard", feat: ["500 credits", "No expiry (1y)", "Priority topics"] },
-            { name: "2,500", price: "₹1,999", sub: "most popular", cta: "Buy via Razorpay", href: "/dashboard", feat: ["2,500 credits", "Email alerts", "Webhook"] , popular: true},
-            { name: "10,000", price: "₹6,999", sub: "scale", cta: "Buy via Razorpay", href: "/dashboard", feat: ["10k credits", "SLA + Analytics"] },
+            { name: "Free", price: "₹0", sub: "180 msgs", cta: "Get started", href: "/signup", feat: ["1 API key", "Knowledge base", "Human queue"] },
+            { name: "500", price: "₹499", sub: "one-time pack", cta: "Buy credits", href: "/dashboard", feat: ["500 credits", "No expiry (1y)", "Priority topics"] },
+            { name: "2,500", price: "₹1,999", sub: "most popular", cta: "Buy credits", href: "/dashboard", feat: ["2,500 credits", "Email alerts", "Webhook"] , popular: true},
+            { name: "10,000", price: "₹6,999", sub: "scale", cta: "Buy credits", href: "/dashboard", feat: ["10k credits", "SLA + Analytics"] },
           ].map((p) => (
             <div key={p.name} className={`rounded-2xl border p-6 ${p.popular ? "border-black bg-black text-white" : "border-zinc-200 bg-white"}`}>
               <div className="text-xs font-mono tracking-widest opacity-60">{p.name}</div>
@@ -106,7 +107,7 @@ curl -X POST https://repllyer.vercel.app/api/v1/chat \\
             </div>
           ))}
         </div>
-        <p className="mt-4 text-xs text-zinc-500">Razorpay webhook auto-credits. 1 credit = 1 classified message (human or resolved).</p>
+        <motion.p initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} className="mt-4 text-xs text-zinc-500">Auto-credits on purchase. 1 credit = 1 message. Extra business = 100 credits. Try the live bot in <Link href="/test" className="underline">Test</Link>.</motion.p>
       </section>
     </div>
   );

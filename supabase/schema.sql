@@ -148,19 +148,34 @@ end; $$;
 drop trigger if exists trg_grant_initial on businesses;
 create trigger trg_grant_initial after insert on businesses for each row execute function grant_initial_credits();
 
--- Coupons (percent off, redeemable at checkout)
+-- Coupons: fixed Rs off (amount_off_paise) + optional percent fallback
 create table if not exists coupons (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
-  percent int not null check (percent > 0 and percent <= 90),
+  percent int check (percent > 0 and percent <= 90),
+  amount_off_paise int check (amount_off_paise >= 0),
   max_uses int,
   uses int not null default 0,
   active boolean default true,
   expires_at timestamptz,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  check (percent is not null or amount_off_paise is not null)
 );
 alter table coupons enable row level security;
--- public read for validate (no RLS needed for checkout lookup via service_role)
+
+-- Migration for existing DBs: add amount_off_paise if missing
+do $$ begin
+  if not exists (select 1 from information_schema.columns where table_name='coupons' and column_name='amount_off_paise') then
+    alter table coupons add column amount_off_paise int check (amount_off_paise >= 0);
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name='coupons' and column_name='percent') then
+    alter table coupons add column percent int check (percent > 0 and percent <= 90);
+  else
+    -- make percent nullable for fixed-amount coupons
+    begin alter table coupons alter column percent drop not null; exception when others then null; end;
+  end if;
+end $$;
+
 -- Gift cards (prepaid credits)
 create table if not exists giftcards (
   id uuid primary key default gen_random_uuid(),
@@ -172,8 +187,13 @@ create table if not exists giftcards (
 );
 alter table giftcards enable row level security;
 
--- Seed example coupons/giftcards (idempotent)
-insert into coupons (code, percent, max_uses) values ('WELCOME10', 10, 100) on conflict (code) do nothing;
-insert into coupons (code, percent, max_uses) values ('REPLLYER20', 20, 50) on conflict (code) do nothing;
+-- Seed: fixed Rs off coupons + legacy percent (idempotent, handle both)
+insert into coupons (code, amount_off_paise, max_uses) values ('FLAT600', 60000, 100) on conflict (code) do nothing;
+insert into coupons (code, amount_off_paise, max_uses) values ('WELCOME500', 50000, 200) on conflict (code) do nothing;
+-- keep percent examples for backward compat (if percent column exists)
+do $$ begin
+  insert into coupons (code, percent, max_uses) values ('WELCOME10', 10, 100) on conflict (code) do nothing;
+  insert into coupons (code, percent, max_uses) values ('REPLLYER20', 20, 50) on conflict (code) do nothing;
+exception when others then null; end $$;
 insert into giftcards (code, credits) values ('GIFT-500', 500) on conflict (code) do nothing;
 insert into giftcards (code, credits) values ('GIFT-1000', 1000) on conflict (code) do nothing;

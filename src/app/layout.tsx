@@ -18,7 +18,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Navbar />
         <div className="flex-1">{children}</div>
         <footer className="border-t border-zinc-200 py-8 text-center text-xs text-zinc-500">
-          © {new Date().getFullYear()} Repllyer — Hosted on Vercel • Supabase • Gofile
+          © {new Date().getFullYear()} Repllyer — Secure • Fast • Reliable
         </footer>
       </body>
     </html>
