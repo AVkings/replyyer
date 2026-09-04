@@ -1,4 +1,4 @@
-const GOFILE_TOKEN = process.env.GOFILE_TOKEN!;
+const GOFILE_TOKEN = (process.env.GOFILE_TOKEN || process.env.GOFILE_API_TOKEN || "") as string;
 const UPLOAD_URL = "https://upload.gofile.io/uploadfile";
 const API_URL = "https://api.gofile.io";
 

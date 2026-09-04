@@ -9,9 +9,9 @@ type KiraaiClassifyResult = {
   extracted_name?: string;
 };
 
-const BASE = process.env.KIRAAI_BASE_URL || "https://kiraai.vn/api/v1";
-const KEY = process.env.KIRAAI_API_KEY!;
-const MODEL = process.env.KIRAAI_MODEL || "gpt-4o-mini";
+const BASE = process.env.KIRAAI_BASE_URL || process.env.KIRA_BASE_URL || "https://kiraai.vn/api/v1";
+const KEY = (process.env.KIRAAI_API_KEY || process.env.KIRA_API_KEY || "") as string;
+const MODEL = process.env.KIRAAI_MODEL || process.env.KIRA_MODEL || "gpt-4o-mini";
 
 function buildSystemPrompt(businessInfo: string, kbText: string) {
   return `You are Repllyer, an AI customer-care bot for a business.

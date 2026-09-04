@@ -2,8 +2,8 @@ import Razorpay from "razorpay";
 import crypto from "crypto";
 
 export function getRazorpay() {
-  const key_id = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
-  const key_secret = process.env.RAZORPAY_KEY_SECRET;
+  const key_id = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+  const key_secret = process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET;
   if (!key_id || !key_secret) throw new Error("Razorpay keys missing");
   return new Razorpay({ key_id, key_secret });
 }
