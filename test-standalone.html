@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Repllyer — standalone client test</title>
+  <style>body{font-family:system-ui;padding:24px;max-width:640px;margin:auto}input,button,textarea{width:100%;padding:10px;margin:6px 0;border:1px solid #ddd;border-radius:10px}#log{white-space:pre-wrap;background:#0a0a0a;color:#a3e635;padding:12px;border-radius:12px;font-size:12px;min-height:120px}</style>
+</head>
+<body>
+  <h3>Repllyer standalone tester (uses https://repllyer.vercel.app)</h3>
+  <p style="font-size:13px;color:#666">Paste your <code>rply_live_...</code> key — guest session (no email needed, bot asks if needed)</p>
+  <input id="key" placeholder="rply_live_..." />
+  <button id="init">1. Init guest session</button>
+  <textarea id="msg" placeholder="refund not received?"></textarea>
+  <button id="send">2. Send chat</button>
+  <div id="log"></div>
+<script>
+const BASE = "https://repllyer.vercel.app";
+let session = null;
+const log = (o)=> document.getElementById('log').textContent = typeof o==='string'?o:JSON.stringify(o,null,2);
+document.getElementById('init').onclick = async ()=>{
+  const k = document.getElementById('key').value.trim();
+  if(!k) return log('paste key');
+  const r = await fetch(BASE+'/api/v1/session/init',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k},body:JSON.stringify({})});
+  const j = await r.json(); log(j); if(j.session_id) session=j.session_id;
+};
+document.getElementById('send').onclick = async ()=>{
+  const k = document.getElementById('key').value.trim();
+  const m = document.getElementById('msg').value.trim();
+  if(!session) return log('init first');
+  const r = await fetch(BASE+'/api/v1/chat',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k},body:JSON.stringify({session_id:session,message:m})});
+  const j = await r.json(); log(j);
+};
+</script>
+</body>
+</html>

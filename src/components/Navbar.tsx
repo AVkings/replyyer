@@ -38,14 +38,12 @@ export function Navbar() {
           {!loading && userEmail ? (
             <>
               <span className="max-w-[180px] truncate text-xs text-zinc-500">{userEmail}</span>
-              <Link href="/onboarding" className="hidden text-zinc-600 hover:text-black md:block">Onboarding</Link>
-              <Link href="/test" className="hidden text-zinc-600 hover:text-black md:block">Test bot</Link>
               <Link href="/dashboard" className="rounded-full bg-black px-4 py-1.5 text-white hover:bg-zinc-800">Dashboard</Link>
               <button onClick={logout} className="rounded-full border border-zinc-200 px-4 py-1.5 hover:bg-zinc-50">Log out</button>
             </>
           ) : (
             <>
-              <Link href="/test" className="text-zinc-600 hover:text-black">Test bot</Link>
+              <Link href="/docs" className="text-zinc-600 hover:text-black">Docs</Link>
               <Link href="/login" className="rounded-full border border-zinc-200 px-4 py-1.5 hover:bg-zinc-50">Log in</Link>
               <Link href="/signup" className="rounded-full bg-black px-4 py-1.5 text-white hover:bg-zinc-800">Get API key</Link>
             </>

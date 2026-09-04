@@ -107,7 +107,7 @@ curl -X POST https://repllyer.vercel.app/api/v1/chat \\
             </div>
           ))}
         </div>
-        <motion.p initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} className="mt-4 text-xs text-zinc-500">Auto-credits on purchase. 1 credit = 1 message. Extra business = 100 credits. Try the live bot in <Link href="/test" className="underline">Test</Link>.</motion.p>
+        <motion.p initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} className="mt-4 text-xs text-zinc-500">Auto-credits on purchase. 1 credit = 1 message. Extra business = 100 credits. See docs for quickstart.</motion.p>
       </section>
     </div>
   );

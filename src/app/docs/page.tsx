@@ -31,7 +31,7 @@ export default function Docs() {
           <li>Copy <code>rply_live_...</code> once. Regenerate anytime from Settings (you'll see prefix + ID).</li>
           <li>Call <code>POST https://repllyer.vercel.app/api/v1/session/init</code> — <b>no email/name needed</b>. Our bot will ask the visitor if missing, or treat them as guest.</li>
           <li>Call <code>POST https://repllyer.vercel.app/api/v1/chat</code> with <code>session_id, message</code>.</li>
-          <li>Try it live at <a href="/test" className="underline">/test</a> — no curl needed.</li>
+          <li>Validate with standalone file <code>test-standalone.html</code> or <code>node scripts/test-client.js</code> (set <code>RPLY_KEY</code>).</li>
         </ol>
 
         <h2 id="auth" className="mt-8 font-semibold">Auth</h2>
@@ -78,7 +78,7 @@ export default function Docs() {
 404 session not found
 410 session expired, re-init`}</pre>
 
-        <p className="mt-8 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-xs text-zinc-600">Onboarding: visit <a href="/onboarding" className="underline">/onboarding</a> after signup — 3 steps to your first chat. Test bot at <a href="/test" className="underline">/test</a>.</p>
+        <p className="mt-8 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-xs text-zinc-600">First login shows a one-time onboarding popup (create business → knowledge → test). You can also visit <a href="/onboarding" className="underline">/onboarding</a> anytime. Client test file: <code>test-standalone.html</code>.</p>
       </article>
     </div>
   );
