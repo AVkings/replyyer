@@ -4,6 +4,7 @@ import { verifyApiKey, extractApiKey } from "@/lib/api-auth";
 import { createServiceClient } from "@/lib/supabase";
 import { consumeCredit, getBalance } from "@/lib/credits";
 import { classifyAndAnswer } from "@/lib/kiraai";
+import { corsHeaders } from "@/lib/cors";
 
 const Body = z.object({
   session_id: z.string().uuid(),
@@ -13,16 +14,16 @@ const Body = z.object({
 export async function POST(req: NextRequest) {
   const rawKey = extractApiKey(req);
   const keyData = await verifyApiKey(rawKey || "");
-  if (!keyData) return NextResponse.json({ error: "invalid api_key, use x-api-key header" }, { status: 401 });
+  if (!keyData) return NextResponse.json({ error: "invalid api_key, use x-api-key header" }, { status: 401, headers: corsHeaders() });
 
   let body: unknown;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "invalid json" }, { status: 400 });
+    return NextResponse.json({ error: "invalid json" }, { status: 400, headers: corsHeaders() });
   }
   const parsed = Body.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400, headers: corsHeaders() });
 
   const { session_id, message } = parsed.data;
   const supa = createServiceClient();
@@ -34,11 +35,11 @@ export async function POST(req: NextRequest) {
     .eq("id", session_id)
     .maybeSingle();
 
-  if (sessErr || !session) return NextResponse.json({ error: "session not found" }, { status: 404 });
-  if (session.business_id !== keyData.business_id) return NextResponse.json({ error: "session mismatch" }, { status: 403 });
+  if (sessErr || !session) return NextResponse.json({ error: "session not found" }, { status: 404, headers: corsHeaders() });
+  if (session.business_id !== keyData.business_id) return NextResponse.json({ error: "session mismatch" }, { status: 403, headers: corsHeaders() });
   if (session.status !== "active" || new Date(session.expires_at).getTime() < Date.now()) {
     await supa.from("sessions").update({ status: "expired" }).eq("id", session_id);
-    return NextResponse.json({ error: "session expired, re-init" }, { status: 410 });
+    return NextResponse.json({ error: "session expired, re-init" }, { status: 410, headers: corsHeaders() });
   }
 
   // Extend expiry on activity
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
 
   // Credit check + consume 1
   const balBefore = await getBalance(keyData.business_id);
-  if (balBefore <= 0) return NextResponse.json({ error: "credits exhausted", credits_remaining: 0 }, { status: 402 });
+  if (balBefore <= 0) return NextResponse.json({ error: "credits exhausted", credits_remaining: 0 }, { status: 402, headers: corsHeaders() });
   const consumed = await consumeCredit(keyData.business_id, "chat");
   const credits_remaining = consumed.ok ? consumed.balance : balBefore - 1;
 
@@ -138,15 +139,18 @@ export async function POST(req: NextRequest) {
       content: result.answer,
     });
 
-    return NextResponse.json({
-      status: "human_required" as const,
-      ticket_id: ticket?.id,
-      priority: result.priority,
-      topic: result.topic,
-      answer: result.answer,
-      confidence: result.confidence,
-      credits_remaining,
-    });
+    return NextResponse.json(
+      {
+        status: "human_required" as const,
+        ticket_id: ticket?.id,
+        priority: result.priority,
+        topic: result.topic,
+        answer: result.answer,
+        confidence: result.confidence,
+        credits_remaining,
+      },
+      { headers: corsHeaders() }
+    );
   }
 
   // Auto-resolved
@@ -157,12 +161,19 @@ export async function POST(req: NextRequest) {
     content: result.answer,
   });
 
-  return NextResponse.json({
-    status: "resolved" as const,
-    answer: result.answer,
-    priority: result.priority,
-    topic: result.topic,
-    confidence: result.confidence,
-    credits_remaining,
-  });
+  return NextResponse.json(
+    {
+      status: "resolved" as const,
+      answer: result.answer,
+      priority: result.priority,
+      topic: result.topic,
+      confidence: result.confidence,
+      credits_remaining,
+    },
+    { headers: corsHeaders() }
+  );
+}
+
+export async function OPTIONS() {
+  return NextResponse.json({ ok: true }, { headers: corsHeaders() });
 }

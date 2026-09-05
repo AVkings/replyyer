@@ -3,6 +3,7 @@ import { z } from "zod";
 import { verifyApiKey, extractApiKey } from "@/lib/api-auth";
 import { createServiceClient } from "@/lib/supabase";
 import { getBalance } from "@/lib/credits";
+import { corsHeaders } from "@/lib/cors";
 
 const Body = z.object({
   name: z.string().min(1).max(100).optional().or(z.literal("")),
@@ -26,13 +27,13 @@ export async function POST(req: NextRequest) {
   }
 
   const keyData = await verifyApiKey(effectiveKey);
-  if (!keyData) return NextResponse.json({ error: "invalid api key" }, { status: 401 });
+  if (!keyData) return NextResponse.json({ error: "invalid api key" }, { status: 401, headers: corsHeaders() });
 
   const parsed = Body.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400, headers: corsHeaders() });
 
   const balance = await getBalance(keyData.business_id);
-  if (balance <= 0) return NextResponse.json({ error: "credits exhausted", credits_remaining: 0 }, { status: 402 });
+  if (balance <= 0) return NextResponse.json({ error: "credits exhausted", credits_remaining: 0 }, { status: 402, headers: corsHeaders() });
 
   const supa = createServiceClient();
   // Allow guest session without email — bot will retrieve later
@@ -69,16 +70,19 @@ export async function POST(req: NextRequest) {
     .select("id, expires_at")
     .single();
 
-  if (sessErr || !session) return NextResponse.json({ error: sessErr?.message }, { status: 500 });
+  if (sessErr || !session) return NextResponse.json({ error: sessErr?.message }, { status: 500, headers: corsHeaders() });
 
-  return NextResponse.json({
-    session_id: session.id,
-    expires_at: session.expires_at,
-    credits_remaining: balance,
-    guest: !emailRaw,
-  });
+  return NextResponse.json(
+    {
+      session_id: session.id,
+      expires_at: session.expires_at,
+      credits_remaining: balance,
+      guest: !emailRaw,
+    },
+    { headers: corsHeaders() }
+  );
 }
 
 export async function OPTIONS() {
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true }, { headers: corsHeaders() });
 }
