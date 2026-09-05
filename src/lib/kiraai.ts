@@ -60,20 +60,109 @@ Respond ONLY with valid JSON:
 {"priority":"urgent|high|medium|low","topic":"string","solvable":bool,"confidence":0-1,"answer":"string","reason":"string","extracted_email":"string or empty","extracted_name":"string or empty","extracted_phone":"string or empty","script_to_run":"slug or empty","script_params":{}}`;
 }
 
+export type ScriptPlanDraft = {
+  name: string;
+  description: string;
+  trigger_keywords: string;
+  required_params: string[];
+  action_type: "code" | "webhook";
+  code_draft: string;
+  webhook_hint: string;
+  env_needed: string[];
+};
+
+export type ScriptPlanChat = {
+  reply: string;
+  mode: "chat" | "plan";
+  questions: string[];
+  plan: ScriptPlanDraft | null;
+};
+
 export type ScriptPlan = {
   mode: "questions" | "plan";
   questions: string[];
-  plan: {
-    name: string;
-    description: string;
-    trigger_keywords: string;
-    required_params: string[];
-    action_type: "code" | "webhook";
-    code_draft: string;
-    webhook_hint: string;
-    env_needed: string[];
-  } | null;
+  plan: ScriptPlanDraft | null;
 };
+
+function sanitizePlanDraft(p: Record<string, unknown>): ScriptPlanDraft | null {
+  if (!p || typeof p.name !== "string" || !p.name.trim()) return null;
+  const allowed = ["email", "phone", "name", "order_id", "username", "account_id"];
+  return {
+    name: String(p.name).slice(0, 80),
+    description: String(p.description || "").slice(0, 1000),
+    trigger_keywords: String(p.trigger_keywords || "").slice(0, 500),
+    required_params: Array.isArray(p.required_params) ? (p.required_params as unknown[]).filter((x): x is string => allowed.includes(x as string)).slice(0, 10) : ["email"],
+    action_type: p.action_type === "webhook" ? "webhook" : "code",
+    code_draft: String(p.code_draft || "").slice(0, 10000),
+    webhook_hint: String(p.webhook_hint || "").slice(0, 500),
+    env_needed: Array.isArray(p.env_needed)
+      ? (p.env_needed as unknown[]).filter((x): x is string => typeof x === "string").map((x) => x.toUpperCase().replace(/[^A-Z0-9_]/g, "").slice(0, 64)).filter(Boolean).slice(0, 20)
+      : [],
+  };
+}
+
+/**
+ * Conversational script architect: multi-turn chat. Replies like a teammate,
+ * asks at most 2 questions per turn, and emits a full plan once the task is clear.
+ */
+export async function planScriptChat(opts: {
+  businessInfo: string;
+  existingScripts: { name: string; description: string }[];
+  history: { role: "user" | "assistant"; content: string }[];
+}): Promise<ScriptPlanChat> {
+  const fallback: ScriptPlanChat = {
+    reply: "Tell me what you want automated — e.g. what should trigger it, what info the visitor must give, and what should happen.",
+    mode: "chat",
+    questions: [],
+    plan: null,
+  };
+  if (!KEY) return fallback;
+
+  const system = `You are Repllyer Architect, a friendly teammate helping a business owner automate a task as a chat script. You hold a CONVERSATION — warm, short messages, at most 2 questions per turn. You NEVER create anything; you only plan.
+
+BUSINESS: ${opts.businessInfo || "unknown business"}
+EXISTING SCRIPTS (do not duplicate): ${opts.existingScripts.length ? opts.existingScripts.map((s) => `"${s.name}: ${s.description}"`).join(" | ") : "none yet"}
+
+RUNTIME (for plans): sandboxed JavaScript on Vercel. Variables: params (visitor info), contact ({name,email,phone}), business ({id,name}), script ({slug,name}), env (owner secrets as env.KEY). Helpers: sendEmail(to, subject, body), log(...). Author sets global result = {...}. No require/process/fetch — external HTTP means action_type "webhook". required_params only from: email, phone, name, order_id, username, account_id. Secrets ONLY via env.KEY, never hardcoded.
+
+BEHAVIOR:
+- If the owner's intent, trigger, required info, or outcome is still unclear, mode "chat": reply conversationally (1-2 short questions), questions = those questions, plan = null.
+- If everything is clear, mode "plan": reply with a 1-2 sentence summary + what secrets they must add, and a complete plan object (working JS code_draft, env_needed for every env.KEY used).
+- Never invent credentials, URLs, or API keys. Unknown external system → action_type "webhook" + webhook_hint describing the endpoint they must provide.
+
+Respond ONLY with valid JSON:
+{"reply":"string","mode":"chat"|"plan","questions":["..."],"plan":null|{"name":"string","description":"string","trigger_keywords":"string","required_params":["email"],"action_type":"code"|"webhook","code_draft":"string","webhook_hint":"string","env_needed":["KEY"]}}`;
+
+  try {
+    const res = await fetch(`${BASE}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "system", content: system }, ...opts.history.slice(-12)],
+        temperature: 0.5,
+        response_format: { type: "json_object" },
+        max_tokens: 1500,
+      }),
+    });
+    if (!res.ok) {
+      console.error("kiraai plan chat error", res.status, await res.text());
+      return fallback;
+    }
+    const json = await res.json();
+    const parsed = JSON.parse(json.choices?.[0]?.message?.content || "{}");
+    const plan = parsed.mode === "plan" ? sanitizePlanDraft(parsed.plan || {}) : null;
+    return {
+      reply: typeof parsed.reply === "string" && parsed.reply.trim() ? parsed.reply.slice(0, 2000) : fallback.reply,
+      mode: plan ? "plan" : "chat",
+      questions: Array.isArray(parsed.questions) ? parsed.questions.filter((q: unknown) => typeof q === "string").slice(0, 4) : [],
+      plan,
+    };
+  } catch (e) {
+    console.error("kiraai plan chat parse error", e);
+    return fallback;
+  }
+}
 
 /**
  * AI script architect: plans a client automation BEFORE creating anything.

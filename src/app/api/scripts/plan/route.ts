@@ -1,18 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase, createServiceClient } from "@/lib/supabase";
-import { planScriptForTask } from "@/lib/kiraai";
+import { planScriptChat } from "@/lib/kiraai";
 import { z } from "zod";
+
+const Msg = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().min(1).max(2000),
+});
 
 const Body = z.object({
   business_id: z.string().uuid(),
-  task: z.string().min(4).max(2000),
-  answers: z.string().max(2000).optional().default(""),
+  history: z.array(Msg).min(1).max(20),
 });
 
 /**
- * AI architect: owner describes a task → AI asks clarifying questions
- * OR returns a full ready-to-review script plan. Planning is free
- * (no credits) — only real chat executions cost 30cr.
+ * AI architect chat: multi-turn conversation that plans a script BEFORE
+ * anything is created. Returns { reply, mode, questions, plan }.
+ * Planning is free (no credits) — only live visitor runs cost 30cr.
  */
 export async function POST(req: NextRequest) {
   const supaAuth = await createServerSupabase();
@@ -22,8 +26,11 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const parsed = Body.safeParse(await req.json().catch(() => ({})));
-  if (!parsed.success) return NextResponse.json({ error: "describe the task (4+ chars)" }, { status: 400 });
-  const { business_id, task, answers } = parsed.data;
+  if (!parsed.success) return NextResponse.json({ error: "send chat history (1–20 messages)" }, { status: 400 });
+  const { business_id, history } = parsed.data;
+  if (!history.some((m) => m.role === "user")) {
+    return NextResponse.json({ error: "say what you want automated" }, { status: 400 });
+  }
 
   const service = createServiceClient();
   const { data: biz } = await service
@@ -40,12 +47,11 @@ export async function POST(req: NextRequest) {
     .eq("business_id", business_id)
     .limit(20);
 
-  const plan = await planScriptForTask({
+  const out = await planScriptChat({
     businessInfo: `${(biz as { name: string }).name}\n${(biz as { description: string }).description || ""}`,
     existingScripts: ((existing as { name: string; description: string }[]) || []).map((s) => ({ name: s.name, description: s.description })),
-    task: task.trim(),
-    answers: answers?.trim(),
+    history,
   });
 
-  return NextResponse.json(plan);
+  return NextResponse.json(out);
 }

@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBiz } from "@/components/dashboard/BizContext";
 import { motion } from "framer-motion";
+import { TypingDots } from "@/components/Loader";
 
 type Script = {
   id: string;
@@ -87,16 +88,20 @@ export default function Scripts() {
   const [editNewKey, setEditNewKey] = useState("");
   const [editNewVal, setEditNewVal] = useState("");
   const [saving, setSaving] = useState(false);
-  // AI builder
-  const [aiTask, setAiTask] = useState("");
-  const [aiAnswers, setAiAnswers] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiQuestions, setAiQuestions] = useState<string[]>([]);
-  const [aiPlan, setAiPlan] = useState<{
-    name: string; description: string; trigger_keywords: string;
-    required_params: string[]; action_type: "code" | "webhook";
-    code_draft: string; webhook_hint: string; env_needed: string[];
-  } | null>(null);
+  // Builder tabs + AI chat
+  const [tab, setTab] = useState<"ai" | "manual">("ai");
+  const [chat, setChat] = useState<{
+    role: "user" | "ai"; text: string; plan?: {
+      name: string; description: string; trigger_keywords: string;
+      required_params: string[]; action_type: "code" | "webhook";
+      code_draft: string; webhook_hint: string; env_needed: string[];
+    } | null;
+  }[]>([
+    { role: "ai", text: "Hey! Tell me what you want automated — e.g. “when visitors forget their password, email them a reset link”. I'll ask a couple of questions, then draft the script for your review." },
+  ]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const chatRef = useRef<HTMLDivElement>(null);
   // Usage history
   const [runs, setRuns] = useState<{
     id: string; script_id: string; session_id: string | null;
@@ -120,50 +125,56 @@ export default function Scripts() {
   };
   useEffect(() => { load(); }, [selected]);
 
-  async function askAI(e?: React.FormEvent) {
+  useEffect(() => {
+    chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
+  }, [chat, chatBusy, tab]);
+
+  async function sendChat(e?: React.FormEvent) {
     e?.preventDefault();
+    const text = chatInput.trim();
+    if (!text || chatBusy) return;
     if (!selected) return setMsg("Select a business first.");
-    if (!aiTask.trim()) return setMsg("Describe the task first (e.g. ‘send reset email when visitors forget passwords’).");
-    setAiLoading(true);
-    setMsg("");
+    const next = [...chat, { role: "user" as const, text }];
+    setChat(next);
+    setChatInput("");
+    setChatBusy(true);
     try {
+      const history = next.slice(-12).map((m) => ({
+        role: (m.role === "ai" ? "assistant" : "user") as "assistant" | "user",
+        content: m.plan ? `${m.text}\n[PLAN ATTACHED: ${m.plan.name}]` : m.text,
+      }));
       const r = await fetch("/api/scripts/plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ business_id: selected, task: aiTask.trim(), answers: aiAnswers.trim() }),
+        body: JSON.stringify({ business_id: selected, history }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "planner failed");
-      if (j.mode === "plan" && j.plan) {
-        setAiPlan(j.plan);
-        setAiQuestions([]);
-      } else {
-        setAiQuestions(j.questions || []);
-        setAiPlan(null);
-      }
+      setChat([...next, { role: "ai" as const, text: j.reply || "…", plan: j.mode === "plan" ? j.plan : null }]);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "planner failed");
+      setChat([...next, { role: "ai" as const, text: `Planner hiccup: ${e instanceof Error ? e.message : "try again"}` }]);
     } finally {
-      setAiLoading(false);
+      setChatBusy(false);
     }
   }
 
-  function usePlan() {
-    if (!aiPlan) return;
+  function usePlan(plan: {
+    name: string; description: string; trigger_keywords: string;
+    required_params: string[]; action_type: "code" | "webhook";
+    code_draft: string; webhook_hint: string; env_needed: string[];
+  }) {
     setForm({
-      name: aiPlan.name,
-      description: aiPlan.description,
-      trigger_keywords: aiPlan.trigger_keywords,
-      required_params: aiPlan.required_params.length ? aiPlan.required_params : ["email"],
-      action_type: aiPlan.action_type,
-      webhook_url: aiPlan.action_type === "webhook" ? aiPlan.webhook_hint : "",
-      code: aiPlan.code_draft || CODE_TEMPLATE,
+      name: plan.name,
+      description: plan.description,
+      trigger_keywords: plan.trigger_keywords,
+      required_params: plan.required_params.length ? plan.required_params : ["email"],
+      action_type: plan.action_type,
+      webhook_url: plan.action_type === "webhook" ? plan.webhook_hint : "",
+      code: plan.code_draft || CODE_TEMPLATE,
     });
-    setEnvRows(aiPlan.env_needed.map((k) => ({ key: k, value: "" })));
-    setAiPlan(null);
-    setAiQuestions([]);
-    setAiAnswers("");
-    setMsg("AI plan loaded into the form below — review it, fill your secret values, then hit Create script.");
+    setEnvRows(plan.env_needed.map((k) => ({ key: k, value: "" })));
+    setTab("manual");
+    setMsg("AI plan loaded into the Manual tab — review it, fill your secret values, then hit Create script.");
   }
 
   const toggleParam = (p: string) => {
@@ -272,82 +283,80 @@ export default function Scripts() {
         <p className="text-xs text-zinc-500">Describe a task and let AI plan the script, or build it manually below. AI verifies info, then runs it for <b>30 credits</b>. E.g. “forgot password → send reset email”.</p>
       </div>
 
-      <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.03 }} className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white space-y-3">
+      <div className="flex gap-1 px-1" role="tablist" aria-label="Script builder">
+        <button
+          role="tab"
+          aria-selected={tab === "ai"}
+          onClick={() => setTab("ai")}
+          className={`rounded-t-xl border px-5 py-2 text-xs font-semibold transition ${tab === "ai" ? "border-zinc-800 border-b-0 bg-zinc-950 text-white -mb-px pb-3" : "border-transparent bg-zinc-100 text-zinc-500 hover:text-black"}`}
+        >
+          ✦ AI Builder
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === "manual"}
+          onClick={() => setTab("manual")}
+          className={`rounded-t-xl border px-5 py-2 text-xs font-semibold transition ${tab === "manual" ? "border-zinc-200 border-b-0 bg-white text-black -mb-px pb-3" : "border-transparent bg-zinc-100 text-zinc-500 hover:text-black"}`}
+        >
+          Manual
+        </button>
+      </div>
+
+      {tab === "ai" && (
+      <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl rounded-tl-none border border-zinc-800 bg-zinc-950 p-5 text-white space-y-3">
         <div className="flex items-center gap-2">
           <span className="grid h-7 w-7 place-items-center rounded-lg bg-white text-xs font-bold text-black">✦</span>
-          <div className="text-sm font-semibold">Ask AI to build it</div>
+          <div className="text-sm font-semibold">Chat with the architect</div>
           <span className="text-[11px] text-zinc-400">free to plan • 30cr only when visitors run it</span>
         </div>
-        <form onSubmit={askAI} className="flex flex-col gap-2 md:flex-row">
+        <div ref={chatRef} className="min-h-[220px] max-h-[380px] overflow-y-auto space-y-3 rounded-xl border border-zinc-800 bg-black/40 p-3">
+          {chat.map((m, i) => (
+            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[88%] rounded-2xl px-3.5 py-2 text-xs leading-5 ${m.role === "user" ? "bg-white text-black" : "bg-zinc-800 text-zinc-100"}`}>
+                <div className="whitespace-pre-wrap">{m.text}</div>
+                {m.plan && (
+                  <div className="mt-2 rounded-xl border border-zinc-600 bg-zinc-900 p-3 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2 justify-between">
+                      <span className="font-semibold text-zinc-100">{m.plan.name}</span>
+                      <span className="rounded-full bg-white px-2 py-0.5 font-mono text-[11px] text-black">{m.plan.action_type}</span>
+                    </div>
+                    <div className="text-zinc-300">{m.plan.description}</div>
+                    <div className="font-mono text-[11px] text-zinc-400">triggers: {m.plan.trigger_keywords || "—"}</div>
+                    <div className="font-mono text-[11px] text-zinc-400">needs: [{m.plan.required_params.join(", ") || "email"}]{m.plan.env_needed.length > 0 && ` • secrets: ${m.plan.env_needed.join(", ")}`}</div>
+                    {m.plan.action_type === "code" && m.plan.code_draft && (
+                      <details>
+                        <summary className="cursor-pointer font-mono text-[11px] text-zinc-400 underline">code draft</summary>
+                        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-black p-2 font-mono text-[11px] leading-4 text-lime-300">{m.plan.code_draft}</pre>
+                      </details>
+                    )}
+                    {m.plan.action_type === "webhook" && m.plan.webhook_hint && (
+                      <div className="font-mono text-[11px] text-zinc-400">endpoint: {m.plan.webhook_hint}</div>
+                    )}
+                    <motion.button whileTap={{ scale: 0.97 }} onClick={() => usePlan(m.plan!)} className="rounded-full bg-white px-4 py-1.5 text-[11px] font-bold text-black">Use this plan ↓</motion.button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {chatBusy && <div className="pl-1"><TypingDots /></div>}
+        </div>
+        <form onSubmit={sendChat} className="flex gap-2">
           <input
-            value={aiTask}
-            onChange={(e) => setAiTask(e.target.value)}
-            placeholder="e.g. when visitors forget their password, email them a reset link"
-            className="flex-1 rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-white placeholder:text-zinc-500 outline-none focus:border-white"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="Describe the task, or answer the AI's questions…"
+            className="flex-1 rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm text-white placeholder:text-zinc-500 outline-none focus:border-white"
           />
-          <motion.button whileTap={{ scale: 0.97 }} disabled={aiLoading} className="rounded-full bg-white px-5 py-2.5 text-xs font-bold text-black disabled:opacity-50">
-            {aiLoading ? "Planning…" : aiQuestions.length ? "Answer →" : "Plan it"}
+          <motion.button whileTap={{ scale: 0.97 }} disabled={chatBusy || !chatInput.trim()} className="rounded-full bg-white px-6 py-2.5 text-xs font-bold text-black disabled:opacity-50">
+            Send
           </motion.button>
         </form>
-        {aiQuestions.length > 0 && !aiPlan && (
-          <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 space-y-2">
-            <div className="text-xs font-semibold text-zinc-300">AI needs a few details before drafting:</div>
-            <ul className="list-disc pl-5 text-xs text-zinc-300 space-y-1">
-              {aiQuestions.map((q, i) => <li key={i}>{q}</li>)}
-            </ul>
-            <textarea
-              value={aiAnswers}
-              onChange={(e) => setAiAnswers(e.target.value)}
-              rows={2}
-              placeholder="Answer here, e.g. trigger = ‘forgot password’; needs = visitor email; outcome = send reset email via Gmail"
-              className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white placeholder:text-zinc-500 outline-none focus:border-white"
-            />
-            <div className="text-[11px] text-zinc-500">Hit “Answer →” and AI will draft the full plan.</div>
-          </div>
-        )}
-        {aiPlan && (
-          <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-4 space-y-2">
-            <div className="flex flex-wrap items-center gap-2 justify-between">
-              <div className="text-xs font-semibold text-zinc-200">AI plan — review before creating</div>
-              <span className="rounded-full bg-white px-2 py-0.5 font-mono text-[11px] text-black">{aiPlan.action_type}</span>
-            </div>
-            <label className="block text-[11px] text-zinc-400">Name</label>
-            <input value={aiPlan.name} onChange={(e) => setAiPlan({ ...aiPlan, name: e.target.value })} className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-1.5 font-mono text-xs text-white" />
-            <label className="block text-[11px] text-zinc-400">What it does</label>
-            <textarea value={aiPlan.description} onChange={(e) => setAiPlan({ ...aiPlan, description: e.target.value })} rows={2} className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-white" />
-            <div className="grid gap-2 md:grid-cols-2">
-              <div>
-                <label className="block text-[11px] text-zinc-400">Triggers</label>
-                <input value={aiPlan.trigger_keywords} onChange={(e) => setAiPlan({ ...aiPlan, trigger_keywords: e.target.value })} className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-1.5 font-mono text-xs text-white" />
-              </div>
-              <div>
-                <label className="block text-[11px] text-zinc-400">Must collect</label>
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {PARAM_OPTIONS.map((p) => (
-                    <button key={p} type="button" onClick={() => setAiPlan({ ...aiPlan, required_params: aiPlan.required_params.includes(p) ? aiPlan.required_params.filter((x) => x !== p) : [...aiPlan.required_params, p] })} className={`rounded-full border px-2.5 py-1 font-mono text-[11px] ${aiPlan.required_params.includes(p) ? "bg-white text-black border-white" : "border-zinc-600 text-zinc-300"}`}>{p}</button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            {aiPlan.action_type === "code" ? (
-              <div>
-                <label className="block text-[11px] text-zinc-400">Code draft (editable)</label>
-                <textarea value={aiPlan.code_draft} onChange={(e) => setAiPlan({ ...aiPlan, code_draft: e.target.value })} rows={8} spellCheck={false} className="mt-1 w-full rounded-xl border border-zinc-700 bg-black p-3 font-mono text-xs leading-5 text-lime-300" />
-                {aiPlan.env_needed.length > 0 && <div className="mt-1 font-mono text-[11px] text-zinc-200">Needs your secrets: {aiPlan.env_needed.join(", ")} — you&apos;ll add values in the form below.</div>}
-              </div>
-            ) : (
-              <div className="text-xs text-zinc-300">Webhook: <code className="font-mono">{aiPlan.webhook_hint || "point it at your server URL below"}</code></div>
-            )}
-            <div className="flex gap-2 pt-1">
-              <motion.button whileTap={{ scale: 0.97 }} onClick={usePlan} className="rounded-full bg-white px-5 py-2 text-xs font-bold text-black">Use this plan ↓</motion.button>
-              <button onClick={() => { setAiPlan(null); setAiQuestions([]); }} className="rounded-full border border-zinc-600 px-4 py-2 text-xs text-zinc-300">Discard</button>
-            </div>
-          </div>
-        )}
       </motion.div>
+      )}
 
-      <motion.form onSubmit={create} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-zinc-200 bg-white p-5 space-y-3">
-        <div className="text-sm font-semibold">New script <span className="font-normal text-zinc-500">— manual, or filled by AI above</span></div>
+      {tab === "manual" && (
+      <motion.form onSubmit={create} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl rounded-tl-none border border-zinc-200 bg-white p-5 space-y-3">
+        <div className="text-sm font-semibold">New script <span className="font-normal text-zinc-500">— manual, or filled in by the AI tab</span></div>
         <div className="grid gap-2 md:grid-cols-2">
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name (e.g. Forgot password)" className="rounded-xl border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-black" />
           <input value={form.trigger_keywords} onChange={(e) => setForm({ ...form, trigger_keywords: e.target.value })} placeholder="Triggers (e.g. forgot password, reset, can't login)" className="rounded-xl border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-black" />
@@ -384,6 +393,7 @@ export default function Scripts() {
         )}
         <motion.button whileTap={{ scale: 0.98 }} disabled={busy} className="rounded-full bg-black px-5 py-2 text-xs font-medium text-white disabled:opacity-50">{busy ? "Creating…" : "Create script"}</motion.button>
       </motion.form>
+      )}
 
       {msg && <div className="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-xs">{msg}</div>}
 
