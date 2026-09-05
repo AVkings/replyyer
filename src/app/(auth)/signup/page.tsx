@@ -1,35 +1,51 @@
 "use client";
 import { useState } from "react";
 import { createBrowserClient } from "@/lib/supabase-browser";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { motion } from "framer-motion";
 
 export default function Signup() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
-  const router = useRouter();
+  const [loading, setLoading] = useState(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg("...");
+  async function signInWithGoogle() {
+    setLoading(true);
+    setMsg("");
     const supa = createBrowserClient();
-    const { error } = await supa.auth.signUp({ email, password });
-    if (error) setMsg(error.message);
-    else { setMsg("Check email or logging you in..."); const { error: e2 } = await supa.auth.signInWithPassword({ email, password }); if (!e2) router.push("/dashboard"); }
+    const origin = window.location.origin;
+    const { error } = await supa.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${origin}/auth/callback?next=/dashboard`,
+      },
+    });
+    if (error) {
+      setMsg(error.message);
+      setLoading(false);
+    }
   }
 
   return (
     <div className="mx-auto max-w-sm px-6 py-16">
-      <h1 className="text-xl font-semibold">Create account</h1>
-      <p className="mt-1 text-sm text-zinc-600">Get 180 free messages on your first business.</p>
-      <form onSubmit={submit} className="mt-6 space-y-3">
-        <input value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="email" className="w-full rounded-xl border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:border-black" />
-        <input value={password} onChange={(e)=>setPassword(e.target.value)} type="password" placeholder="password (6+ chars)" className="w-full rounded-xl border border-zinc-200 px-3 py-2.5 text-sm outline-none focus:border-black" />
-        <button className="w-full rounded-full bg-black py-2.5 text-sm font-medium text-white hover:bg-zinc-800">Sign up</button>
-      </form>
-      {msg && <p className="mt-3 text-xs text-zinc-600">{msg}</p>}
-      <p className="mt-4 text-xs text-zinc-500">Have account? <Link href="/login" className="underline">Log in</Link></p>
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+        <h1 className="text-xl font-semibold">Create account</h1>
+        <p className="mt-1 text-sm text-zinc-600">Google sign-in only. Get 180 free credits on your first business.</p>
+        <div className="mt-6 space-y-3">
+          <button
+            onClick={signInWithGoogle}
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-3 rounded-full bg-black py-3 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+          >
+            <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#fff" d="M43.6 20.5H42V20H24v8h11.3C34.7 32.1 29.6 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.1 8 2.9l6-6C34.5 5.1 29.4 3 24 3 12.3 3 3 12.3 3 24s9.3 21 21 21c10.5 0 20.1-7.6 20.1-21 0-1.4-.1-2.7-.3-3.5z"/></svg>
+            {loading ? "Redirecting..." : "Continue with Google"}
+          </button>
+          <p className="text-center text-xs text-zinc-500">No password needed. Google creates your account instantly.</p>
+        </div>
+        {msg && <p className="mt-3 text-xs text-red-600">{msg}</p>}
+        <p className="mt-6 text-center text-xs text-zinc-500">
+          Already have an account? <Link href="/login" className="underline">Log in</Link>
+        </p>
+      </motion.div>
     </div>
   );
 }
