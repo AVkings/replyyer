@@ -34,7 +34,12 @@ export async function GET() {
   try {
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "Repllyer/1.0 (+https://repllyer.vercel.app)",
+        Authorization: `Bearer ${key}`,
+      },
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: "reply with ok" }],

@@ -44,7 +44,12 @@ async function chatJson(
     try {
       const res = await fetch(`${BASE}/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": "Repllyer/1.0 (+https://repllyer.vercel.app)",
+          Authorization: `Bearer ${KEY}`,
+        },
         body: JSON.stringify({ model: MODEL, messages, temperature: opts.temperature, response_format: { type: "json_object" }, max_tokens }),
       });
       if (!res.ok) {
