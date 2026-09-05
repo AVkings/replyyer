@@ -25,6 +25,35 @@ export function slugify(name: string): string {
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || `script-${Date.now()}`;
 }
 
+export type OutgoingMail = { to: string; subject: string; body: string };
+
+/**
+ * Deliver queued emails. Real Gmail SMTP send ONLY when server env is set:
+ *   GMAIL_USER = full Gmail address
+ *   GMAIL_APP_PASSWORD = Google App Password (NOT your login password)
+ * Otherwise emails are logged-only (safe default — no secrets needed).
+ * Secrets stay server-side; never put them in script code or the DB.
+ */
+export async function flushOutbox(emails: OutgoingMail[]): Promise<(OutgoingMail & { sent: boolean; note?: string; error?: string })[]> {
+  const user = (process.env.GMAIL_USER || "").trim();
+  const pass = (process.env.GMAIL_APP_PASSWORD || "").trim();
+  if (!user || !pass) {
+    return emails.map((e) => ({ ...e, sent: false, note: "logged only; set GMAIL_USER + GMAIL_APP_PASSWORD server-side for real delivery" }));
+  }
+  const nodemailer = (await import("nodemailer")).default;
+  const transporter = nodemailer.createTransport({ service: "gmail", auth: { user, pass } });
+  const out: (OutgoingMail & { sent: boolean; note?: string; error?: string })[] = [];
+  for (const e of emails) {
+    try {
+      await transporter.sendMail({ from: user, to: e.to, subject: e.subject, text: e.body });
+      out.push({ ...e, sent: true });
+    } catch (err) {
+      out.push({ ...e, sent: false, error: err instanceof Error ? err.message.slice(0, 300) : "send failed" });
+    }
+  }
+  return out;
+}
+
 type CodeExecResult = { result: Record<string, unknown>; emails: { to: string; subject: string; body: string }[]; logs: string[] };
 
 /**
@@ -111,15 +140,15 @@ export async function runScript(opts: {
         business: { id: businessId, name: businessName || "" },
         script: { slug: script.slug, name: script.name },
       });
-      result = { action: "code", language: "javascript", ...exec.result, emails: exec.emails, logs: exec.logs };
+      const delivered = await flushOutbox(exec.emails);
+      result = { action: "code", language: "javascript", ...exec.result, emails: delivered, logs: exec.logs };
     } else if (script.action_type === "send_email") {
       const cfg = script.action_config as { to?: string; subject?: string; template?: string };
       const to = params.email || (cfg.to as string) || "";
       const subject = (cfg.subject as string) || `Your ${script.name} request`;
       const template = (cfg.template as string) || `Hi, your request "${script.name}" was processed.`;
-      // MVP: log the email (plug real SMTP/Resend here). We record it as sent.
-      console.log(`[script email] to=${to} subject=${subject} script=${script.slug}`);
-      result = { action: "send_email", to, subject, body: template, sent: true, note: "logged; connect SMTP/Resend for real delivery" };
+      const delivered = await flushOutbox([{ to, subject, body: template }]);
+      result = { action: "send_email", ...delivered[0] };
     } else if (script.action_type === "webhook") {
       const cfg = script.action_config as { url?: string; method?: string };
       if (!cfg.url) throw new Error("webhook url not configured");

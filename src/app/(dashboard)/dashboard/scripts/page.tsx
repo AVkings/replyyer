@@ -136,7 +136,7 @@ export default function Scripts() {
               <button type="button" onClick={() => setForm({ ...form, code: CODE_TEMPLATE })} className="text-[11px] underline shrink-0">Reset template</button>
             </div>
             <textarea value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} rows={14} spellCheck={false} className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs leading-5 text-lime-300 outline-none focus:border-black" placeholder="// your code here" />
-            <div className="mt-1 text-[11px] text-zinc-500">{form.code.length}/10000 chars • runs sandboxed (no network except webhook type) • 30 credits per run • Python not supported on serverless — JS covers the same logic</div>
+            <div className="mt-1 text-[11px] text-zinc-500">{form.code.length}/10000 chars • runs sandboxed (no network except webhook type) • 30 credits per run • Python not supported on serverless — JS covers the same logic • real inbox delivery needs GMAIL_USER + GMAIL_APP_PASSWORD set on the server, else sends are logged only</div>
           </div>
         )}
         {form.action_type === "webhook" && (
