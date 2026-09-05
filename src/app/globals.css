@@ -14,10 +14,26 @@
 
 * { scrollbar-width: thin; scrollbar-color: #d4d4d8 transparent; }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #0a0a0a;
+  color: #ffffff;
+}
+
+:focus-visible {
+  outline: 2px solid #0a0a0a;
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 /* grid pattern */
@@ -26,4 +42,91 @@ body {
     linear-gradient(to right, #f4f4f5 1px, transparent 1px),
     linear-gradient(to bottom, #f4f4f5 1px, transparent 1px);
   background-size: 40px 40px;
+}
+
+/* giant outlined backdrop word */
+.text-outline {
+  color: transparent;
+  -webkit-text-stroke: 1.5px #e4e4e7;
+}
+
+/* infinite ticker */
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee var(--marquee-duration, 32s) linear infinite;
+}
+.marquee:hover .marquee-track {
+  animation-play-state: paused;
+}
+.marquee-mask {
+  mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
+}
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* slow float for ambient blobs */
+@keyframes floaty {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-16px); }
+}
+.animate-floaty {
+  animation: floaty 7s ease-in-out infinite;
+}
+.animate-floaty-slow {
+  animation: floaty 11s ease-in-out infinite;
+}
+
+/* shine sweep on primary buttons */
+.btn-shine {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.btn-shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(105deg, transparent 40%, rgba(255, 255, 255, 0.35) 50%, transparent 60%);
+  transform: translateX(-120%);
+  transition: transform 0.7s ease;
+  pointer-events: none;
+}
+.btn-shine:hover::after {
+  transform: translateX(120%);
+}
+
+/* soft pulsing ring for live dots */
+@keyframes ring-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(10, 10, 10, 0.25); }
+  70% { box-shadow: 0 0 0 9px rgba(10, 10, 10, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(10, 10, 10, 0); }
+}
+.animate-ring {
+  animation: ring-pulse 2.2s ease-out infinite;
+}
+
+/* animated caret for demo chat */
+@keyframes blink-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.animate-caret {
+  animation: blink-caret 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track,
+  .animate-floaty,
+  .animate-floaty-slow,
+  .animate-ring,
+  .animate-caret {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
 }

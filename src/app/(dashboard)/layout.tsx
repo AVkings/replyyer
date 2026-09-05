@@ -1,6 +1,12 @@
+import type { Metadata } from "next";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { BizProvider } from "@/components/dashboard/BizContext";
 import { OnboardingPopup } from "@/components/OnboardingPopup";
+
+export const metadata: Metadata = {
+  title: "Dashboard",
+  robots: { index: false, follow: false },
+};
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (

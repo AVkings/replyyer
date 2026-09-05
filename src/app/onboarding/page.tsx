@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 const steps = [
   { n: 1, t: "Create your business", d: "Tell us what you sell — we generate your API key." },
   { n: 2, t: "Add knowledge", d: "Upload PDFs or paste Q&A so AI answers accurately." },
-  { n: 3, t: "Connect & test", d: "Call https://repllyer.vercel.app — test live at /test." },
+  { n: 3, t: "Connect & test", d: "Call https://repllyer.vercel.app — examples live in the docs." },
 ];
 
 export default function Onboarding() {
@@ -26,8 +26,9 @@ export default function Onboarding() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center">
+    <div className="relative mx-auto max-w-3xl overflow-hidden px-6 py-10">
+      <div className="animate-floaty pointer-events-none absolute -top-16 left-1/2 h-52 w-[30rem] -translate-x-1/2 rounded-full bg-zinc-200/70 blur-3xl" aria-hidden="true" />
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="relative text-center">
         <h1 className="text-2xl font-semibold tracking-tight">Welcome to Repllyer</h1>
         <p className="mt-1 text-sm text-zinc-600">3 steps — animated, fast. Base URL <code className="font-mono">https://repllyer.vercel.app</code></p>
       </motion.div>
@@ -72,7 +73,7 @@ export default function Onboarding() {
   -H "x-api-key: ${apiKey || "rply_live_..."}" \\
   -d '{}' // guest ok`}</pre>
             <div className="mt-4 flex gap-2">
-              <Link href="/test" className="rounded-full bg-black px-6 py-2.5 text-sm text-white">Open live test bot</Link>
+              <Link href="/docs#chat" className="rounded-full bg-black px-6 py-2.5 text-sm text-white">See live examples</Link>
               <Link href="/dashboard" className="rounded-full border border-zinc-200 px-6 py-2.5 text-sm">Go to dashboard</Link>
             </div>
           </motion.div>

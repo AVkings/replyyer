@@ -1,3 +1,32 @@
+import type { Metadata } from "next";
+import { CopyButton } from "@/components/CopyButton";
+import { Reveal } from "@/components/motion";
+
+export const metadata: Metadata = {
+  title: "API Docs — Sessions, Chat, Scripts & Billing",
+  description:
+    "Repllyer API reference: guest sessions, chat with priority sorting and human takeover, action scripts, credits, coupons, and error codes. Base URL https://repllyer.vercel.app.",
+};
+
+const SESSION_CURL = `curl -X POST https://repllyer.vercel.app/api/v1/session/init \\
+  -H "x-api-key: rply_live_..." -H "Content-Type: application/json" \\
+  -d '{}'
+# optional: -d '{"name":"Aarav","email":"aarav@example.com"}'
+
+# 200 { "session_id": "uuid", "expires_at": "...", "credits_remaining": 177, "guest": true }
+# 401 invalid key, 402 credits exhausted`;
+
+const CHAT_CURL = `curl -X POST https://repllyer.vercel.app/api/v1/chat \\
+  -H "x-api-key: rply_live_..." -H "Content-Type: application/json" \\
+  -d '{"session_id":"uuid","message":"my refund not received"}'
+
+# auto-resolved
+{ "status":"resolved","answer":"...","priority":"urgent","topic":"refund","confidence":0.88 }
+
+# needs human
+{ "status":"human_required","ticket_id":"uuid","priority":"urgent","topic":"refund" }
+# Dashboard picks via inbox / CRM`;
+
 export default function Docs() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-10 grid md:grid-cols-[220px_1fr] gap-10">
@@ -21,12 +50,14 @@ export default function Docs() {
         </div>
       </aside>
       <article className="prose max-w-none prose-zinc prose-sm">
-        <h1 className="text-2xl font-semibold tracking-tight">Repllyer Docs</h1>
-        <p className="text-zinc-600">API-first customer care. Base URL <code>https://repllyer.vercel.app</code>. One key powers session + chat, with human takeover and priority sorting.</p>
+        <Reveal>
+          <h1 className="text-2xl font-semibold tracking-tight">Repllyer Docs</h1>
+          <p className="text-zinc-600">API-first customer care. Base URL <code>https://repllyer.vercel.app</code>. One key powers session + chat, with human takeover and priority sorting.</p>
+        </Reveal>
 
         <h2 id="quick" className="mt-8 font-semibold">Quickstart</h2>
         <ol className="list-decimal pl-5 text-sm text-zinc-700 space-y-1">
-          <li>Sign up at /signup (email + password) — you get 180 free credits.</li>
+          <li>Sign up at /signup with Google (no password) — you get 180 free credits.</li>
           <li>Create Business → paste what you sell + upload PDFs or raw text (knowledge base).</li>
           <li>Copy <code>rply_live_...</code> once. Regenerate anytime from Settings (you'll see prefix + ID).</li>
           <li>Call <code>POST https://repllyer.vercel.app/api/v1/session/init</code> — <b>no email/name needed</b>. Our bot will ask the visitor if missing, or treat them as guest.</li>
@@ -39,25 +70,16 @@ export default function Docs() {
 
         <h2 id="session" className="mt-8 font-semibold">POST /api/v1/session/init</h2>
         <p className="text-xs text-zinc-500 mb-2">No email/name required — bot retrieves it. Send empty body for guest.</p>
-        <pre className="overflow-auto rounded-xl bg-zinc-950 p-4 text-xs leading-5 text-zinc-200">{`curl -X POST https://repllyer.vercel.app/api/v1/session/init \\
-  -H "x-api-key: rply_live_..." -H "Content-Type: application/json" \\
-  -d '{}'
-# optional: -d '{"name":"Aarav","email":"aarav@example.com"}'
-
-# 200 { "session_id": "uuid", "expires_at": "...", "credits_remaining": 177, "guest": true }
-# 401 invalid key, 402 credits exhausted`}</pre>
+        <div className="relative">
+          <div className="absolute right-3 top-3"><CopyButton text={SESSION_CURL} dark /></div>
+          <pre className="overflow-auto rounded-xl bg-zinc-950 p-4 pt-10 text-xs leading-5 text-zinc-200">{SESSION_CURL}</pre>
+        </div>
 
         <h2 id="chat" className="mt-8 font-semibold">POST /api/v1/chat</h2>
-        <pre className="overflow-auto rounded-xl bg-zinc-950 p-4 text-xs leading-5 text-zinc-200">{`curl -X POST https://repllyer.vercel.app/api/v1/chat \\
-  -H "x-api-key: rply_live_..." -H "Content-Type: application/json" \\
-  -d '{"session_id":"uuid","message":"my refund not received"}'
-
-# auto-resolved
-{ "status":"resolved","answer":"...","priority":"urgent","topic":"refund","confidence":0.88 }
-
-# needs human
-{ "status":"human_required","ticket_id":"uuid","priority":"urgent","topic":"refund" }
-# Dashboard picks via inbox / CRM`}</pre>
+        <div className="relative">
+          <div className="absolute right-3 top-3"><CopyButton text={CHAT_CURL} dark /></div>
+          <pre className="overflow-auto rounded-xl bg-zinc-950 p-4 pt-10 text-xs leading-5 text-zinc-200">{CHAT_CURL}</pre>
+        </div>
         <p className="text-xs text-zinc-500">1 credit per call. History (last 10) + knowledge base sent to AI securely.</p>
 
         <h2 id="priority" className="mt-8 font-semibold">Priority & Topic</h2>

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useBiz } from "@/components/dashboard/BizContext";
 import { createBrowserClient } from "@/lib/supabase-browser";
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { CountUp, Item, Reveal, Stagger } from "@/components/motion";
 
 export default function Overview() {
   const { selected, bizs } = useBiz();
@@ -35,25 +35,31 @@ export default function Overview() {
         <p className="text-xs text-zinc-500">{biz?.domain || "No domain"} • {balance !== null ? `${balance} credits left` : "loading credits..."}</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-zinc-200 bg-white p-5">
-          <div className="text-xs text-zinc-500">Credits</div>
-          <div className="mt-1 text-2xl font-semibold">{balance ?? "—"}</div>
-          <div className="text-xs text-zinc-500">180 free to start. <Link href="/dashboard/billing" className="underline">Buy more</Link></div>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="rounded-2xl border border-zinc-200 bg-white p-5">
-          <div className="text-xs text-zinc-500">Sessions (chats)</div>
-          <div className="mt-1 text-2xl font-semibold">{stats.sessions}</div>
-          <div className="text-xs text-zinc-500">Each session = one visitor (name/email captured)</div>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="rounded-2xl bg-black p-5 text-white">
-          <div className="text-xs text-zinc-400">Human tickets</div>
-          <div className="mt-1 text-2xl font-semibold">{stats.tickets}</div>
-          <Link href="/dashboard/inbox" className="text-xs underline">Open inbox →</Link>
-        </motion.div>
-      </div>
+      <Stagger className="grid gap-4 md:grid-cols-3" gap={0.08}>
+        <Item>
+          <div className="h-full rounded-2xl border border-zinc-200 bg-white p-5 transition duration-300 hover:-translate-y-0.5 hover:shadow-lg">
+            <div className="text-xs text-zinc-500">Credits</div>
+            <div className="mt-1 text-2xl font-semibold">{balance === null ? "—" : <CountUp to={balance} />}</div>
+            <div className="text-xs text-zinc-500">180 free to start. <Link href="/dashboard/billing" className="underline">Buy more</Link></div>
+          </div>
+        </Item>
+        <Item>
+          <div className="h-full rounded-2xl border border-zinc-200 bg-white p-5 transition duration-300 hover:-translate-y-0.5 hover:shadow-lg">
+            <div className="text-xs text-zinc-500">Sessions (chats)</div>
+            <div className="mt-1 text-2xl font-semibold"><CountUp to={stats.sessions} /></div>
+            <div className="text-xs text-zinc-500">Each session = one visitor (name/email captured)</div>
+          </div>
+        </Item>
+        <Item>
+          <div className="h-full rounded-2xl bg-black p-5 text-white transition duration-300 hover:-translate-y-0.5 hover:shadow-xl">
+            <div className="text-xs text-zinc-400">Human tickets</div>
+            <div className="mt-1 text-2xl font-semibold"><CountUp to={stats.tickets} /></div>
+            <Link href="/dashboard/inbox" className="text-xs underline">Open inbox →</Link>
+          </div>
+        </Item>
+      </Stagger>
 
-      <div className="rounded-2xl border border-zinc-200 bg-white p-5">
+      <Reveal className="rounded-2xl border border-zinc-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <div className="text-sm font-semibold">Recent escalations</div>
           <Link href="/dashboard/chats" className="text-xs underline">View CRM →</Link>
@@ -68,13 +74,16 @@ export default function Overview() {
             </div>
           ))}
         </div>
-      </div>
+      </Reveal>
 
-      <div className="rounded-2xl border border-zinc-200 bg-zinc-950 p-5 text-white">
-        <div className="text-sm font-semibold">Quick test</div>
-        <p className="mt-1 text-xs text-zinc-400">Use the playground in CRM to test session + chat without curl.</p>
-        <Link href="/dashboard/chats" className="mt-3 inline-block rounded-full bg-white px-4 py-1.5 text-xs font-medium text-black">Open CRM</Link>
-      </div>
+      <Reveal delay={0.08} className="relative overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-950 p-5 text-white">
+        <div className="animate-floaty absolute -right-10 -top-10 h-40 w-40 rounded-full bg-zinc-800 blur-3xl" aria-hidden="true" />
+        <div className="relative">
+          <div className="text-sm font-semibold">Quick test</div>
+          <p className="mt-1 text-xs text-zinc-400">Use the playground in CRM to test session + chat without curl.</p>
+          <Link href="/dashboard/chats" className="btn-shine mt-3 inline-block rounded-full bg-white px-4 py-1.5 text-xs font-medium text-black">Open CRM</Link>
+        </div>
+      </Reveal>
     </div>
   );
 }

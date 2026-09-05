@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { motion } from "framer-motion";
 
 const nav = [
   { href: "/dashboard", label: "Overview", icon: "◧" },
@@ -21,9 +22,10 @@ export function Sidebar() {
           {nav.map((n) => {
             const active = pathname === n.href || (n.href !== "/dashboard" && pathname.startsWith(n.href));
             return (
-              <Link key={n.href} href={n.href} className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${active ? "bg-black text-white" : "hover:bg-zinc-50 text-zinc-700"}`}>
-                <span className="w-5 text-center text-xs">{n.icon}</span>
-                {n.label}
+              <Link key={n.href} href={n.href} className={`relative flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition ${active ? "text-white" : "hover:bg-zinc-50 text-zinc-700"}`}>
+                {active && <motion.span layoutId="sidebar-active" className="absolute inset-0 rounded-xl bg-black" transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }} />}
+                <span className="relative w-5 text-center text-xs">{n.icon}</span>
+                <span className="relative">{n.label}</span>
               </Link>
             );
           })}

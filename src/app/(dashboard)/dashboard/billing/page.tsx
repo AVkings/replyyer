@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useBiz } from "@/components/dashboard/BizContext";
 import { motion } from "framer-motion";
+import { CountUp } from "@/components/motion";
 import { paygRateFor, paygAmountPaise, PAYG_MIN, PAYG_MAX, formatINR } from "@/lib/pricing";
 
 const PACKS = [
@@ -145,7 +146,7 @@ export default function Billing() {
 
       <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="rounded-2xl border border-zinc-200 bg-white p-5">
         <div className="text-sm font-semibold">Balance</div>
-        <div className="mt-1 text-3xl font-semibold">{balance ?? "—"} <span className="text-sm font-normal text-zinc-500">credits</span></div>
+        <div className="mt-1 text-3xl font-semibold">{balance === null ? "—" : <CountUp to={balance} />} <span className="text-sm font-normal text-zinc-500">credits</span></div>
         <div className="text-xs text-zinc-500">1 credit = 1 message • script run = 30 credits. 180 free on first business. Extra business = 100 credits.</div>
       </motion.div>
 
