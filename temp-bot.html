@@ -8,7 +8,7 @@
   *{box-sizing:border-box;margin:0;padding:0;font-family:Inter,ui-sans-serif,system-ui}
   body{background:#fafafa;color:#0a0a0a;min-height:100vh;display:grid;place-items:center;padding:20px}
   .wrap{width:100%;max-width:420px;background:#fff;border:1px solid #e4e4e7;border-radius:22px;overflow:hidden;box-shadow:0 20px 40px rgba(0,0,0,0.08);display:flex;flex-direction:column;height:620px}
-  .head{padding:14px 16px;border-bottom:1px solid #e4e4e7;display:flex;align-items:center;gap:10px;background:#fff;position:sticky;top:0}
+  .head{padding:14px 16px;border-bottom:1px solid #e4e4e7;display:flex;align-items:center;gap:10px;background:#fff}
   .dot{width:32px;height:32px;border-radius:999px;background:#000;color:#fff;display:grid;place-items:center;font-weight:700;font-size:13px}
   .head h1{font-size:14px;font-weight:600}
   .head p{font-size:11px;color:#71717a}
@@ -18,7 +18,6 @@
   .bubble{max-width:78%;padding:10px 14px;border-radius:18px;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
   .bubble.assistant{background:#fff;border:1px solid #e4e4e7;border-bottom-left-radius:6px}
   .bubble.user{background:#000;color:#fff;border-bottom-right-radius:6px;align-self:flex-end}
-  .bubble.meta{font-size:11px;color:#71717a;margin-top:4px}
   .typing{font-size:12px;color:#71717a;padding:0 16px 6px}
   .composer{padding:12px;border-top:1px solid #e4e4e7;display:flex;gap:8px;background:#fff}
   .composer input{flex:1;border:1px solid #e4e4e7;border-radius:999px;padding:10px 14px;font-size:13px;outline:none}
@@ -26,18 +25,16 @@
   .composer button{border:none;background:#000;color:#fff;border-radius:999px;padding:10px 18px;font-size:13px;font-weight:600;cursor:pointer}
   .composer button:disabled{opacity:0.5;cursor:not-allowed}
   .foot{padding:8px 12px;text-align:center;font-size:10px;color:#a1a1aa;border-top:1px solid #f4f4f5}
-  a{color:inherit}
-  .keybar{padding:10px 12px;border-top:1px solid #f4f4f5;background:#f9f9fb;display:flex;gap:8px;align-items:center}
-  .keybar input{flex:1;font-size:11px;font-family:monospace;padding:8px;border-radius:8px;border:1px solid #e4e4e7}
+  .hint{padding:8px 12px;background:#f9f9fb;border-top:1px solid #f4f4f5;text-align:center;font-size:11px;color:#71717a}
 </style>
 </head>
 <body>
-<div class="wrap" id="wrap">
+<div class="wrap">
   <div class="head">
     <div class="dot">R</div>
     <div>
       <h1>Repllyer Bot</h1>
-      <p>Temporary — guest mode (AI asks email if needed)</p>
+      <p>Temporary — key stored server-side</p>
     </div>
     <div class="status" id="status">not connected</div>
   </div>
@@ -49,122 +46,88 @@
     <input id="input" placeholder="Type a message… try 'refund not received?'" autocomplete="off" />
     <button id="send">Send</button>
   </div>
-  <div class="keybar">
-    <input id="key" placeholder="Paste rply_live_... here (not stored)" autocomplete="off" />
-    <button id="reconnect" style="font-size:11px;padding:6px 10px;border-radius:999px;border:1px solid #e4e4e7;background:#fff;cursor:pointer">Connect</button>
+  <div class="hint">
+    <button id="reconnect" style="font-size:11px;padding:6px 12px;border-radius:999px;border:1px solid #e4e4e7;background:#fff;cursor:pointer">Connect / Reconnect</button>
+    <span style="margin-left:8px" id="sid"></span>
   </div>
-  <div class="foot">Base URL: https://repllyer.vercel.app • Guest session auto-created • <span id="sid" style="font-family:monospace"></span></div>
+  <div class="foot">No API key in page — stored securely on server • Guest mode • https://repllyer.vercel.app</div>
 </div>
 
 <script>
-const BASE = "https://repllyer.vercel.app";
+// Auto-detect base: works when opened via file://, http://localhost, or https://repllyer.vercel.app
+const BASE = (() => {
+  const origin = window.location.origin;
+  if (origin && origin !== 'null' && !origin.startsWith('file://')) return origin;
+  return 'https://repllyer.vercel.app';
+})();
 let sessionId = null;
-let credits = null;
 
 const msgsEl = document.getElementById('msgs');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 const statusEl = document.getElementById('status');
 const typingEl = document.getElementById('typing');
-const keyEl = document.getElementById('key');
 const sidEl = document.getElementById('sid');
 
 function addBubble(role, text, meta){
   const wrap = document.createElement('div');
-  wrap.style.display = 'flex';
-  wrap.style.flexDirection = 'column';
-  wrap.style.alignItems = role==='user' ? 'flex-end' : 'flex-start';
-  const b = document.createElement('div');
-  b.className = 'bubble ' + role;
-  b.textContent = text;
-  wrap.appendChild(b);
-  if(meta){
-    const m = document.createElement('div');
-    m.className = 'meta';
-    m.style.fontSize='11px'; m.style.color='#71717a'; m.style.padding='2px 2px';
-    m.textContent = meta;
-    wrap.appendChild(m);
-  }
-  msgsEl.appendChild(wrap);
-  msgsEl.scrollTop = msgsEl.scrollHeight;
+  wrap.style.display = 'flex'; wrap.style.flexDirection = 'column'; wrap.style.alignItems = role==='user' ? 'flex-end' : 'flex-start';
+  const b = document.createElement('div'); b.className = 'bubble ' + role; b.textContent = text; wrap.appendChild(b);
+  if(meta){ const m=document.createElement('div'); m.style.fontSize='11px'; m.style.color='#71717a'; m.textContent=meta; wrap.appendChild(m); }
+  msgsEl.appendChild(wrap); msgsEl.scrollTop = msgsEl.scrollHeight;
 }
-
-function setStatus(t, live){
-  statusEl.textContent = t;
-  statusEl.className = 'status' + (live ? ' live' : '');
-}
+function setStatus(t, live){ statusEl.textContent=t; statusEl.className='status'+(live?' live':''); }
 
 async function initSession(){
-  const key = keyEl.value.trim();
-  if(!key) return;
-  setStatus('connecting…', false);
-  typingEl.style.display = 'block';
+  setStatus('connecting…', false); typingEl.style.display='block';
   try{
-    const r = await fetch(BASE + '/api/v1/session/init', {
+    const r = await fetch(BASE + '/api/temp/session', {
       method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':key},
-      body: JSON.stringify({}) // guest — no name/email, bot will retrieve
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({})
     });
     const j = await r.json();
     if(!r.ok) throw new Error(j.error || 'init failed ' + r.status);
     sessionId = j.session_id;
-    credits = j.credits_remaining;
-    sidEl.textContent = sessionId.slice(0,8) + '…';
-    setStatus((j.guest?'guest • ':'') + credits + ' credits', true);
+    sidEl.textContent = sessionId.slice(0,8)+'… • '+ (j.credits_remaining ?? '') +' credits';
+    setStatus((j.guest?'guest • ':'') + (j.credits_remaining ?? '') +' credits', true);
     msgsEl.innerHTML='';
-    addBubble('assistant', 'Hi! I’m your temporary Repllyer bot. Ask me anything — if I can’t answer, a human will take over. (Guest mode — I’ll ask for email only if needed)');
+    addBubble('assistant', 'Hi! I’m your temporary Repllyer bot. Key is stored server-side — no paste needed. Ask me anything.');
   }catch(e){
     setStatus('error', false);
-    addBubble('assistant', 'Failed to init: ' + e.message + ' — tip: serve via http (npx serve .) not file://, and check key');
+    addBubble('assistant', 'Failed to init: ' + e.message + ' — tip: serve via https://repllyer.vercel.app/temp-bot.html or run npx serve .');
     console.error(e);
-  }finally{
-    typingEl.style.display='none';
-  }
+  }finally{ typingEl.style.display='none'; }
 }
 
 async function send(){
   const text = inputEl.value.trim();
-  const key = keyEl.value.trim();
   if(!text || !sessionId) return;
-  if(!key) return alert('Paste API key');
-  addBubble('user', text);
-  inputEl.value='';
-  sendBtn.disabled = true;
-  typingEl.style.display='block';
+  addBubble('user', text); inputEl.value=''; sendBtn.disabled=true; typingEl.style.display='block';
   try{
-    const r = await fetch(BASE + '/api/v1/chat', {
+    const r = await fetch(BASE + '/api/temp/chat', {
       method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':key},
+      headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ session_id: sessionId, message: text })
     });
     const j = await r.json();
-    if(!r.ok){
-      if(r.status===410){ sessionId=null; setStatus('expired — reconnect', false); }
-      throw new Error(j.error || 'chat failed ' + r.status);
-    }
-    credits = j.credits_remaining;
-    setStatus((j.status==='human_required'?'human queued • ':'') + credits + ' credits', true);
-    const meta = `${j.priority || ''} • ${j.topic || ''} • ${j.status || ''}`.trim();
+    if(!r.ok){ if(r.status===410){ sessionId=null; setStatus('expired — reconnect', false); } throw new Error(j.error || 'chat failed '+r.status); }
+    setStatus((j.status==='human_required'?'human queued • ':'') + j.credits_remaining +' credits', true);
+    const meta = `${j.priority||''} • ${j.topic||''} • ${j.status||''}`.trim();
     addBubble('assistant', j.answer || '(no answer)', meta + (j.confidence?` • ${Math.round(j.confidence*100)}%`:'' ));
-    if(j.status==='human_required'){
-      addBubble('assistant', '— Your message was queued for a human. Priority: ' + j.priority);
-    }
+    if(j.status==='human_required') addBubble('assistant','— Queued for human. Priority: '+j.priority);
   }catch(e){
-    addBubble('assistant', 'Error: ' + e.message + ' — check CORS / key');
+    addBubble('assistant','Error: '+e.message);
     console.error(e);
-  }finally{
-    typingEl.style.display='none';
-    sendBtn.disabled=false;
-    inputEl.focus();
-  }
+  }finally{ typingEl.style.display='none'; sendBtn.disabled=false; inputEl.focus(); }
 }
 
 sendBtn.onclick = send;
 inputEl.onkeydown = e => { if(e.key==='Enter') send(); };
 document.getElementById('reconnect').onclick = initSession;
-
-// no auto-init — user must paste key and click Connect (prevents leaked key + fixes file:// CORS timing)
-addBubble('assistant', 'Paste your API key below and click Connect to start a guest session. No email needed — bot will ask if required.');
+addBubble('assistant','Click Connect to start a guest session. No API key needed — stored securely on server.');
+// auto-connect if served from repllyer
+if(BASE.includes('repllyer.vercel.app')) initSession();
 </script>
 </body>
 </html>
