@@ -9,7 +9,7 @@ const Patch = z.object({
   description: z.string().max(1000).optional(),
   trigger_keywords: z.string().max(500).optional(),
   required_params: z.array(z.string()).max(10).optional(),
-  action_type: z.enum(["send_email", "webhook", "mock", "code"]).optional(),
+  action_type: z.enum(["code", "webhook"]).optional(),
   action_config: z.record(z.string(), z.unknown()).optional(),
   is_active: z.boolean().optional(),
 });
@@ -39,15 +39,39 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
   if (parsed.data.action_type) patch.action_type = parsed.data.action_type;
   if (parsed.data.action_config) {
-    const cfg = parsed.data.action_config as Record<string, unknown>;
-    const effectiveType = parsed.data.action_type;
-    if (effectiveType === "code" || (!effectiveType && cfg.code !== undefined)) {
-      const code = String(cfg.code || "");
+    const incoming = parsed.data.action_config as Record<string, unknown>;
+    // Merge with stored config so an empty password field keeps the saved one
+    const { data: existing } = await service
+      .from("business_scripts")
+      .select("action_type, action_config")
+      .eq("id", id)
+      .eq("business_id", parsed.data.business_id)
+      .maybeSingle();
+    if (!existing) return NextResponse.json({ error: "not found" }, { status: 404 });
+    const prev = ((existing as { action_config: Record<string, unknown> }).action_config || {}) as Record<string, unknown>;
+    const merged: Record<string, unknown> = { ...prev, ...incoming };
+    if (incoming.gmail_app_password === "" || incoming.gmail_app_password === undefined) {
+      if (prev.gmail_app_password) merged.gmail_app_password = prev.gmail_app_password;
+      else delete merged.gmail_app_password;
+    } else {
+      const pw = String(merged.gmail_app_password || "").trim().replace(/\s+/g, "");
+      if (pw.length > 500) return NextResponse.json({ error: "gmail_app_password too long" }, { status: 400 });
+      merged.gmail_app_password = pw;
+    }
+    if (merged.gmail_user !== undefined && merged.gmail_user !== "") {
+      if (typeof merged.gmail_user !== "string" || !merged.gmail_user.includes("@")) {
+        return NextResponse.json({ error: "gmail_user must be a valid email address" }, { status: 400 });
+      }
+      merged.gmail_user = merged.gmail_user.trim();
+    }
+    const effType = parsed.data.action_type || (existing as { action_type: string }).action_type;
+    if (effType === "code") {
+      const code = String(merged.code || "");
       if (!code.trim()) return NextResponse.json({ error: "code is required for code scripts" }, { status: 400 });
       if (code.length > SCRIPT_CODE_MAX) return NextResponse.json({ error: `code too long (max ${SCRIPT_CODE_MAX} chars)` }, { status: 400 });
-      if (cfg.language && cfg.language !== "javascript") return NextResponse.json({ error: "only javascript supported" }, { status: 400 });
+      if (merged.language && merged.language !== "javascript") return NextResponse.json({ error: "only javascript supported" }, { status: 400 });
     }
-    patch.action_config = parsed.data.action_config;
+    patch.action_config = merged;
   }
   if (parsed.data.is_active !== undefined) patch.is_active = parsed.data.is_active;
 

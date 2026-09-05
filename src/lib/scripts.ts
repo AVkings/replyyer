@@ -6,7 +6,9 @@ export const SCRIPT_RUN_COST = 30;
 export const SCRIPT_CODE_MAX = 10000;
 export const SCRIPT_RUN_TIMEOUT_MS = 8000;
 
-export type ScriptActionType = "send_email" | "webhook" | "mock" | "code";
+export type ScriptActionType = "code" | "webhook" | "send_email" | "mock";
+// NOTE: only "code" + "webhook" can be created now (DB constraint 005).
+// send_email/mock branches below exist only to finish runs of legacy rows.
 
 export type ScriptRow = {
   id: string;
@@ -28,17 +30,21 @@ export function slugify(name: string): string {
 export type OutgoingMail = { to: string; subject: string; body: string };
 
 /**
- * Deliver queued emails. Real Gmail SMTP send ONLY when server env is set:
- *   GMAIL_USER = full Gmail address
- *   GMAIL_APP_PASSWORD = Google App Password (NOT your login password)
- * Otherwise emails are logged-only (safe default — no secrets needed).
- * Secrets stay server-side; never put them in script code or the DB.
+ * Deliver queued emails via Gmail SMTP using THIS SCRIPT's own credentials:
+ *   gmail_user         = the client's Gmail address (stored in the script's settings)
+ *   gmail_app_password = that account's Google App Password (NOT the login password)
+ * Each business stores its own creds inside its own script — nothing shared,
+ * nothing in server env, never logged, never returned to the browser.
+ * Without creds, emails are logged-only (safe default).
  */
-export async function flushOutbox(emails: OutgoingMail[]): Promise<(OutgoingMail & { sent: boolean; note?: string; error?: string })[]> {
-  const user = (process.env.GMAIL_USER || "").trim();
-  const pass = (process.env.GMAIL_APP_PASSWORD || "").trim();
+export async function flushOutbox(
+  emails: OutgoingMail[],
+  creds?: { user?: string; pass?: string }
+): Promise<(OutgoingMail & { sent: boolean; note?: string; error?: string })[]> {
+  const user = (creds?.user || "").trim();
+  const pass = (creds?.pass || "").trim();
   if (!user || !pass) {
-    return emails.map((e) => ({ ...e, sent: false, note: "logged only; set GMAIL_USER + GMAIL_APP_PASSWORD server-side for real delivery" }));
+    return emails.map((e) => ({ ...e, sent: false, note: "logged only; save Gmail address + App Password in this script's settings for real delivery" }));
   }
   const nodemailer = (await import("nodemailer")).default;
   const transporter = nodemailer.createTransport({ service: "gmail", auth: { user, pass } });
@@ -131,7 +137,7 @@ export async function runScript(opts: {
   let result: Record<string, unknown> = { action: script.action_type };
   try {
     if (script.action_type === "code") {
-      const cfg = script.action_config as { code?: string; language?: string };
+      const cfg = script.action_config as { code?: string; language?: string; gmail_user?: string; gmail_app_password?: string };
       if ((cfg.language || "javascript") !== "javascript") throw new Error("only javascript code scripts are supported on serverless (Python not available) — paste JS using the same variables");
       const exec = await runClientCode({
         code: String(cfg.code || ""),
@@ -140,14 +146,15 @@ export async function runScript(opts: {
         business: { id: businessId, name: businessName || "" },
         script: { slug: script.slug, name: script.name },
       });
-      const delivered = await flushOutbox(exec.emails);
+      const delivered = await flushOutbox(exec.emails, { user: cfg.gmail_user, pass: cfg.gmail_app_password });
       result = { action: "code", language: "javascript", ...exec.result, emails: delivered, logs: exec.logs };
     } else if (script.action_type === "send_email") {
-      const cfg = script.action_config as { to?: string; subject?: string; template?: string };
+      // Legacy (pre-005). Kept so old rows finish cleanly; new ones can't be created.
+      const cfg = script.action_config as { to?: string; subject?: string; template?: string; gmail_user?: string; gmail_app_password?: string };
       const to = params.email || (cfg.to as string) || "";
       const subject = (cfg.subject as string) || `Your ${script.name} request`;
       const template = (cfg.template as string) || `Hi, your request "${script.name}" was processed.`;
-      const delivered = await flushOutbox([{ to, subject, body: template }]);
+      const delivered = await flushOutbox([{ to, subject, body: template }], { user: cfg.gmail_user, pass: cfg.gmail_app_password });
       result = { action: "send_email", ...delivered[0] };
     } else if (script.action_type === "webhook") {
       const cfg = script.action_config as { url?: string; method?: string };
