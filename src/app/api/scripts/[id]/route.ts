@@ -39,8 +39,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
   if (parsed.data.action_type) patch.action_type = parsed.data.action_type;
   if (parsed.data.action_config) {
-    const incoming = parsed.data.action_config as Record<string, unknown>;
-    // Merge with stored config so an empty password field keeps the saved one
+    const incoming = parsed.data.action_config as Record<string, unknown> & { env?: Record<string, unknown>; env_remove?: string[] };
+    // Merge with stored config so empty secret fields keep the saved values
     const { data: existing } = await service
       .from("business_scripts")
       .select("action_type, action_config")
@@ -49,7 +49,25 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .maybeSingle();
     if (!existing) return NextResponse.json({ error: "not found" }, { status: 404 });
     const prev = ((existing as { action_config: Record<string, unknown> }).action_config || {}) as Record<string, unknown>;
+    const prevEnv = (prev.env && typeof prev.env === "object" ? prev.env : {}) as Record<string, unknown>;
     const merged: Record<string, unknown> = { ...prev, ...incoming };
+    delete (merged as Record<string, unknown>).env_remove;
+    // Generic env vars: non-empty = set/update, "" or missing = keep, env_remove[] = delete
+    const nextEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(prevEnv)) if (typeof v === "string") nextEnv[k] = v;
+    if (incoming.env && typeof incoming.env === "object") {
+      for (const [k, v] of Object.entries(incoming.env as Record<string, unknown>)) {
+        if (!/^[A-Z0-9_]{1,64}$/.test(k)) return NextResponse.json({ error: `bad env key "${k}"` }, { status: 400 });
+        if (typeof v === "string" && v.trim()) {
+          if (v.length > 2000) return NextResponse.json({ error: `bad value for "${k}"` }, { status: 400 });
+          nextEnv[k] = v.trim();
+        }
+        // empty string = keep existing (already in nextEnv)
+      }
+      if (Object.keys(nextEnv).length > 20) return NextResponse.json({ error: "max 20 env vars per script" }, { status: 400 });
+    }
+    for (const k of Array.isArray(incoming.env_remove) ? incoming.env_remove : []) delete nextEnv[k];
+    merged.env = nextEnv;
     if (incoming.gmail_app_password === "" || incoming.gmail_app_password === undefined) {
       if (prev.gmail_app_password) merged.gmail_app_password = prev.gmail_app_password;
       else delete merged.gmail_app_password;

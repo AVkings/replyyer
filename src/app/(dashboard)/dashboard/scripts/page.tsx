@@ -12,6 +12,7 @@ type Script = {
   required_params: string[];
   action_type: "code" | "webhook";
   action_config: Record<string, unknown>;
+  env_keys?: string[];
   gmail_app_password_set?: boolean;
   is_active: boolean;
   created_at: string;
@@ -20,9 +21,11 @@ type Script = {
 const PARAM_OPTIONS = ["email", "phone", "name", "order_id", "username", "account_id"];
 
 const CODE_TEMPLATE = `// Variables: params (params.email, params.phone...), contact ({name,email,phone}),
-// business ({id, name}), script ({slug, name})
+// business ({id, name}), script ({slug, name}), env (YOUR OWN variables below)
 // Helpers: sendEmail(to, subject, body), log(...)
 // Set: result = {...} to return data.
+// Secrets: never hardcode passwords here — put them in Variables,
+// read via env.YOUR_KEY. Gmail? add GMAIL_USER + GMAIL_APP_PASSWORD below.
 
 if (!params.email) throw new Error("email required");
 
@@ -34,6 +37,38 @@ sendEmail(
 
 result = { emailed: params.email, action: "password-reset-sent" };`;
 
+type EnvRow = { key: string; value: string };
+
+function EnvEditor({ rows, setRows }: { rows: EnvRow[]; setRows: (r: EnvRow[]) => void }) {
+  return (
+    <div>
+      <div className="text-xs text-zinc-500">Your variables — stored inside this script only (API keys, SMTP passwords, anything). Code reads them as <code className="font-mono">env.KEY</code>. Values are never shown again after saving.</div>
+      <div className="mt-2 space-y-1.5">
+        {rows.map((r, i) => (
+          <div key={i} className="flex gap-2">
+            <input
+              value={r.key}
+              onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, key: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") } : x)))}
+              placeholder="KEY (e.g. GMAIL_APP_PASSWORD)"
+              className="w-1/2 rounded-xl border border-zinc-200 px-3 py-1.5 font-mono text-xs"
+            />
+            <input
+              value={r.value}
+              onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+              type="password"
+              placeholder={r.key ? "value (empty = keep saved)" : "value"}
+              className="w-1/2 rounded-xl border border-zinc-200 px-3 py-1.5 font-mono text-xs"
+              autoComplete="new-password"
+            />
+            <button type="button" onClick={() => setRows(rows.filter((_, j) => j !== i))} className="rounded-full border border-zinc-200 px-3 text-xs">✕</button>
+          </div>
+        ))}
+        <button type="button" onClick={() => setRows([...rows, { key: "", value: "" }])} className="rounded-full border border-dashed border-zinc-300 px-3 py-1 text-xs">+ add variable</button>
+      </div>
+    </div>
+  );
+}
+
 export default function Scripts() {
   const { selected } = useBiz();
   const [scripts, setScripts] = useState<Script[]>([]);
@@ -42,12 +77,15 @@ export default function Scripts() {
   const [form, setForm] = useState({
     name: "", description: "", trigger_keywords: "", required_params: ["email"],
     action_type: "code" as Script["action_type"],
-    webhook_url: "", code: CODE_TEMPLATE, gmail_user: "", gmail_app_password: "",
+    webhook_url: "", code: CODE_TEMPLATE,
   });
+  const [envRows, setEnvRows] = useState<EnvRow[]>([{ key: "GMAIL_USER", value: "" }, { key: "GMAIL_APP_PASSWORD", value: "" }]);
   const [editing, setEditing] = useState<string | null>(null);
   const [editCode, setEditCode] = useState("");
-  const [editUser, setEditUser] = useState("");
-  const [editPass, setEditPass] = useState("");
+  const [editEnv, setEditEnv] = useState<EnvRow[]>([]);
+  const [editRemove, setEditRemove] = useState<string[]>([]);
+  const [editNewKey, setEditNewKey] = useState("");
+  const [editNewVal, setEditNewVal] = useState("");
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
@@ -62,6 +100,12 @@ export default function Scripts() {
     setForm((f) => ({ ...f, required_params: f.required_params.includes(p) ? f.required_params.filter((x) => x !== p) : [...f.required_params, p] }));
   };
 
+  function envObject(rows: EnvRow[]) {
+    const o: Record<string, string> = {};
+    for (const r of rows) if (r.key.trim() && r.value) o[r.key.trim()] = r.value;
+    return o;
+  }
+
   async function create(e: React.FormEvent) {
     e.preventDefault();
     if (!selected) return setMsg("Select a business first.");
@@ -72,11 +116,7 @@ export default function Scripts() {
       const action_config: Record<string, unknown> =
         form.action_type === "webhook"
           ? { url: form.webhook_url.trim(), method: "POST" }
-          : {
-              code: form.code, language: "javascript",
-              gmail_user: form.gmail_user.trim() || undefined,
-              ...(form.gmail_app_password.trim() ? { gmail_app_password: form.gmail_app_password.trim().replace(/\s+/g, "") } : {}),
-            };
+          : { code: form.code, language: "javascript", env: envObject(envRows) };
       const r = await fetch("/api/scripts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -93,7 +133,8 @@ export default function Scripts() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "create failed");
       setMsg(`Script "${j.script.name}" created. AI will run it for 30 credits when info is verified.`);
-      setForm({ name: "", description: "", trigger_keywords: "", required_params: ["email"], action_type: "code", webhook_url: "", code: CODE_TEMPLATE, gmail_user: "", gmail_app_password: "" });
+      setForm({ name: "", description: "", trigger_keywords: "", required_params: ["email"], action_type: "code", webhook_url: "", code: CODE_TEMPLATE });
+      setEnvRows([{ key: "GMAIL_USER", value: "" }, { key: "GMAIL_APP_PASSWORD", value: "" }]);
       load();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "create failed");
@@ -105,8 +146,10 @@ export default function Scripts() {
   function startEdit(s: Script) {
     setEditing(s.id);
     setEditCode(String(s.action_config.code || ""));
-    setEditUser(String(s.action_config.gmail_user || ""));
-    setEditPass("");
+    setEditEnv((s.env_keys || []).map((k) => ({ key: k, value: "" })));
+    setEditRemove([]);
+    setEditNewKey("");
+    setEditNewVal("");
     setMsg("");
   }
 
@@ -119,12 +162,12 @@ export default function Scripts() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           business_id: selected,
-          action_config: { code: editCode, language: "javascript", gmail_user: editUser.trim(), gmail_app_password: editPass },
+          action_config: { code: editCode, language: "javascript", env: envObject(editEnv), env_remove: editRemove },
         }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "save failed");
-      setMsg("Script updated. Empty password field keeps the saved one.");
+      setMsg("Script updated. Empty values kept the saved secrets.");
       setEditing(null);
       load();
     } catch (e) {
@@ -132,6 +175,11 @@ export default function Scripts() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function removeEditKey(k: string) {
+    setEditEnv(editEnv.filter((r) => r.key !== k));
+    setEditRemove([...editRemove, k]);
   }
 
   async function toggleActive(s: Script) {
@@ -151,7 +199,7 @@ export default function Scripts() {
     <div className="space-y-5">
       <div>
         <motion.h1 initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="text-lg font-semibold">Action scripts — playground</motion.h1>
-        <p className="text-xs text-zinc-500">Write real JavaScript with client variables (<code className="font-mono">params.email</code>, <code className="font-mono">contact.name</code>) + <code className="font-mono">sendEmail()</code>. AI verifies info, then runs it for <b>30 credits</b>. Each script keeps its own Gmail credentials — nothing shared.</p>
+        <p className="text-xs text-zinc-500">Write real JavaScript with client variables + your own secrets below. AI verifies info, then runs it for <b>30 credits</b>. E.g. “forgot password → send reset email”.</p>
       </div>
 
       <motion.form onSubmit={create} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="rounded-2xl border border-zinc-200 bg-white p-5 space-y-3">
@@ -178,17 +226,16 @@ export default function Scripts() {
           <input value={form.webhook_url} onChange={(e) => setForm({ ...form, webhook_url: e.target.value })} placeholder="https://your-server.com/reset-password" className="w-full rounded-xl border border-zinc-200 px-3 py-2 font-mono text-sm" />
         )}
         {form.action_type === "code" && (
-          <div>
-            <div className="flex items-center justify-between">
-              <div className="text-xs text-zinc-500">JavaScript — <code className="font-mono">params.*</code>, <code className="font-mono">contact.*</code>, <code className="font-mono">sendEmail(to, subject, body)</code> → set <code className="font-mono">result = {"{...}"}</code></div>
-              <button type="button" onClick={() => setForm({ ...form, code: CODE_TEMPLATE })} className="text-[11px] underline shrink-0">Reset template</button>
+          <div className="space-y-3">
+            <div>
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-zinc-500">JavaScript — <code className="font-mono">params.*</code>, <code className="font-mono">contact.*</code>, <code className="font-mono">env.*</code>, <code className="font-mono">sendEmail()</code> → <code className="font-mono">result = {"{...}"}</code></div>
+                <button type="button" onClick={() => setForm({ ...form, code: CODE_TEMPLATE })} className="text-[11px] underline shrink-0">Reset template</button>
+              </div>
+              <textarea value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} rows={12} spellCheck={false} className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs leading-5 text-lime-300 outline-none focus:border-black" placeholder="// your code here — secrets go in Variables below, never here" />
+              <div className="mt-1 text-[11px] text-zinc-500">{form.code.length}/10000 chars • sandboxed • 30 credits per run • Python not supported on serverless — JS covers the same logic</div>
             </div>
-            <textarea value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} rows={12} spellCheck={false} className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs leading-5 text-lime-300 outline-none focus:border-black" placeholder="// your code here" />
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
-              <input value={form.gmail_user} onChange={(e) => setForm({ ...form, gmail_user: e.target.value })} placeholder="Gmail address for sending (e.g. you@gmail.com)" className="rounded-xl border border-zinc-200 px-3 py-2 font-mono text-sm" />
-              <input value={form.gmail_app_password} onChange={(e) => setForm({ ...form, gmail_app_password: e.target.value })} type="password" placeholder="Google App Password (not login password)" className="rounded-xl border border-zinc-200 px-3 py-2 font-mono text-sm" autoComplete="new-password" />
-            </div>
-            <div className="mt-1 text-[11px] text-zinc-500">{form.code.length}/10000 chars • sandboxed • 30 credits per run • credentials are saved inside this script only — leave empty to log sends instead of delivering</div>
+            <EnvEditor rows={envRows} setRows={setEnvRows} />
           </div>
         )}
         <motion.button whileTap={{ scale: 0.98 }} disabled={busy} className="rounded-full bg-black px-5 py-2 text-xs font-medium text-white disabled:opacity-50">{busy ? "Creating…" : "Create script"}</motion.button>
@@ -207,11 +254,10 @@ export default function Scripts() {
                   <span className="text-sm font-medium">{s.name}</span>
                   <span className="ml-2 font-mono text-[11px] text-zinc-500">{s.slug}</span>
                   <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-[11px]">{s.action_type}</span>
-                  {s.action_type === "code" && (
-                    <span className={`ml-1 rounded-full px-2 py-0.5 text-[11px] ${s.gmail_app_password_set ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-                      {s.gmail_app_password_set ? "gmail saved" : "no gmail — logs only"}
-                    </span>
-                  )}
+                  {(s.env_keys || []).map((k) => (
+                    <span key={k} className="ml-1 rounded-full bg-green-100 px-2 py-0.5 font-mono text-[11px] text-green-800">🔑{k}</span>
+                  ))}
+                  {s.gmail_app_password_set && <span className="ml-1 rounded-full bg-green-100 px-2 py-0.5 text-[11px] text-green-800">gmail saved</span>}
                 </div>
                 <div className="flex gap-2">
                   {s.action_type === "code" && (
@@ -226,13 +272,22 @@ export default function Scripts() {
               {editing === s.id && s.action_type === "code" && (
                 <div className="mt-3 space-y-2 rounded-xl bg-zinc-50 p-3">
                   <textarea value={editCode} onChange={(e) => setEditCode(e.target.value)} rows={10} spellCheck={false} className="w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs leading-5 text-lime-300" />
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <input value={editUser} onChange={(e) => setEditUser(e.target.value)} placeholder="Gmail address" className="rounded-xl border border-zinc-200 bg-white px-3 py-2 font-mono text-xs" />
-                    <input value={editPass} onChange={(e) => setEditPass(e.target.value)} type="password" placeholder={s.gmail_app_password_set ? "•••••• saved — leave empty to keep" : "Google App Password"} className="rounded-xl border border-zinc-200 bg-white px-3 py-2 font-mono text-xs" autoComplete="new-password" />
+                  <div className="text-xs text-zinc-500">Saved variables ({(s.env_keys || []).length}) — empty value keeps the saved secret, ✕ deletes it:</div>
+                  {editEnv.map((r, i) => (
+                    <div key={r.key} className="flex gap-2">
+                      <input value={r.key} disabled className="w-1/2 rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-1.5 font-mono text-xs" />
+                      <input value={r.value} onChange={(e) => setEditEnv(editEnv.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} type="password" placeholder="empty = keep saved" className="w-1/2 rounded-xl border border-zinc-200 bg-white px-3 py-1.5 font-mono text-xs" autoComplete="new-password" />
+                      <button type="button" onClick={() => removeEditKey(r.key)} className="rounded-full border border-zinc-200 bg-white px-3 text-xs">✕</button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <input value={editNewKey} onChange={(e) => setEditNewKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))} placeholder="NEW_KEY" className="w-1/3 rounded-xl border border-zinc-200 bg-white px-3 py-1.5 font-mono text-xs" />
+                    <input value={editNewVal} onChange={(e) => setEditNewVal(e.target.value)} type="password" placeholder="value" className="w-1/3 rounded-xl border border-zinc-200 bg-white px-3 py-1.5 font-mono text-xs" autoComplete="new-password" />
+                    <button onClick={() => { if (editNewKey.trim() && editNewVal) { setEditEnv([...editEnv, { key: editNewKey.trim(), value: editNewVal }]); setEditNewKey(""); setEditNewVal(""); } }} className="rounded-full border border-dashed border-zinc-300 bg-white px-3 py-1.5 text-[11px]">+ add</button>
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => saveEdit(s)} disabled={saving} className="rounded-full bg-black px-4 py-1.5 text-[11px] text-white disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
-                    <button onClick={() => setEditing(null)} className="rounded-full border border-zinc-200 px-4 py-1.5 text-[11px]">Cancel</button>
+                    <button onClick={() => setEditing(null)} className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 text-[11px]">Cancel</button>
                   </div>
                 </div>
               )}

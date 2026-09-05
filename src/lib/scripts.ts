@@ -64,7 +64,8 @@ type CodeExecResult = { result: Record<string, unknown>; emails: { to: string; s
 
 /**
  * Run client JS code in a sandbox.
- * Available variables: params, contact {name,email,phone}, business {id,name}, script {slug,name}.
+ * Available variables: params, contact {name,email,phone}, business {id,name},
+ * script {slug,name}, env {YOUR_KEY: "value"} (the script's own variables).
  * Helpers: sendEmail(to, subject, body), log(...). Set global `result = {...}` to return data.
  * No require/process/fetch — use the `webhook` action type for external HTTP.
  */
@@ -74,8 +75,9 @@ async function runClientCode(opts: {
   contact: { name: string; email: string; phone: string };
   business: { id: string; name: string };
   script: { slug: string; name: string };
+  env: Record<string, string>;
 }): Promise<CodeExecResult> {
-  const { code, params, contact, business, script } = opts;
+  const { code, params, contact, business, script, env } = opts;
   if (!code.trim()) throw new Error("code is empty");
   if (code.length > SCRIPT_CODE_MAX) throw new Error(`code too long (max ${SCRIPT_CODE_MAX} chars)`);
 
@@ -87,6 +89,7 @@ async function runClientCode(opts: {
     contact: { ...contact },
     business: { ...business },
     script: { ...script },
+    env: { ...env },
     result: {} as Record<string, unknown>,
     log: (...args: unknown[]) => {
       logs.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ").slice(0, 1000));
@@ -137,24 +140,31 @@ export async function runScript(opts: {
   let result: Record<string, unknown> = { action: script.action_type };
   try {
     if (script.action_type === "code") {
-      const cfg = script.action_config as { code?: string; language?: string; gmail_user?: string; gmail_app_password?: string };
+      const cfg = script.action_config as { code?: string; language?: string; gmail_user?: string; gmail_app_password?: string; env?: Record<string, string> };
       if ((cfg.language || "javascript") !== "javascript") throw new Error("only javascript code scripts are supported on serverless (Python not available) — paste JS using the same variables");
+      // Secrets come from the script's OWN env vars (client-owned). Legacy gmail_* fields still work as fallback.
+      const env = { ...((cfg.env as Record<string, string>) || {}) };
       const exec = await runClientCode({
         code: String(cfg.code || ""),
         params,
         contact: contact || { name: "", email: params.email || "", phone: params.phone || "" },
         business: { id: businessId, name: businessName || "" },
         script: { slug: script.slug, name: script.name },
+        env,
       });
-      const delivered = await flushOutbox(exec.emails, { user: cfg.gmail_user, pass: cfg.gmail_app_password });
-      result = { action: "code", language: "javascript", ...exec.result, emails: delivered, logs: exec.logs };
+      const sent = await flushOutbox(exec.emails, {
+        user: env.GMAIL_USER || cfg.gmail_user,
+        pass: env.GMAIL_APP_PASSWORD || cfg.gmail_app_password,
+      });
+      result = { action: "code", language: "javascript", ...exec.result, emails: sent, logs: exec.logs };
     } else if (script.action_type === "send_email") {
       // Legacy (pre-005). Kept so old rows finish cleanly; new ones can't be created.
-      const cfg = script.action_config as { to?: string; subject?: string; template?: string; gmail_user?: string; gmail_app_password?: string };
+      const cfg = script.action_config as { to?: string; subject?: string; template?: string; gmail_user?: string; gmail_app_password?: string; env?: Record<string, string> };
       const to = params.email || (cfg.to as string) || "";
       const subject = (cfg.subject as string) || `Your ${script.name} request`;
       const template = (cfg.template as string) || `Hi, your request "${script.name}" was processed.`;
-      const delivered = await flushOutbox([{ to, subject, body: template }], { user: cfg.gmail_user, pass: cfg.gmail_app_password });
+      const env = ((cfg.env as Record<string, string>) || {});
+      const delivered = await flushOutbox([{ to, subject, body: template }], { user: env.GMAIL_USER || cfg.gmail_user, pass: env.GMAIL_APP_PASSWORD || cfg.gmail_app_password });
       result = { action: "send_email", ...delivered[0] };
     } else if (script.action_type === "webhook") {
       const cfg = script.action_config as { url?: string; method?: string };
