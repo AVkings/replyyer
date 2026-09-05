@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase, createServiceClient } from "@/lib/supabase";
 import { planScriptChat } from "@/lib/kiraai";
+import { getBalance, consumeCredit } from "@/lib/credits";
 import { z } from "zod";
 
 const Msg = z.object({
@@ -15,8 +16,9 @@ const Body = z.object({
 
 /**
  * AI architect chat: multi-turn conversation that plans a script BEFORE
- * anything is created. Returns { reply, mode, questions, plan }.
- * Planning is free (no credits) — only live visitor runs cost 30cr.
+ * anything is created. Returns { reply, mode, questions, plan, credits_remaining }.
+ * Each planner message costs 1 credit (like visitor chat). Live runs cost 30cr.
+ * Provider failures return 503 with NO charge — never a fake looping reply.
  */
 export async function POST(req: NextRequest) {
   const supaAuth = await createServerSupabase();
@@ -47,11 +49,24 @@ export async function POST(req: NextRequest) {
     .eq("business_id", business_id)
     .limit(20);
 
+  // 1 credit per planner message — check upfront so broke accounts get a clear 402
+  const balBefore = await getBalance(business_id).catch(() => 0);
+  if (balBefore <= 0) {
+    return NextResponse.json({ error: "out of credits — top up in Billing to keep chatting with the builder." }, { status: 402 });
+  }
+
   const out = await planScriptChat({
     businessInfo: `${(biz as { name: string }).name}\n${(biz as { description: string }).description || ""}`,
     existingScripts: ((existing as { name: string; description: string }[]) || []).map((s) => ({ name: s.name, description: s.description })),
     history,
   });
 
-  return NextResponse.json(out);
+  // Provider down/blocked → honest error, NO charge, NO fake looping reply
+  if (!out.ok) {
+    return NextResponse.json({ error: "AI planner is unreachable right now — try again in a minute. No credits used." }, { status: 503 });
+  }
+
+  const consumed = await consumeCredit(business_id, "ai_plan_chat");
+  const credits_remaining = consumed.ok ? consumed.balance : balBefore;
+  return NextResponse.json({ ...out, credits_remaining });
 }

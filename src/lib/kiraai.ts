@@ -24,6 +24,54 @@ const BASE = process.env.KIRAAI_BASE_URL || process.env.KIRA_BASE_URL || "https:
 const KEY = (process.env.KIRAAI_API_KEY || process.env.KIRA_API_KEY || "") as string;
 const MODEL = process.env.KIRAAI_MODEL || process.env.KIRA_MODEL || "gpt-4o-mini";
 
+function stripFences(s: string): string {
+  return s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+}
+
+/**
+ * JSON-mode chat with retry. Reasoning models can burn the token budget on
+ * thinking and return EMPTY content (finish_reason=length) — that used to
+ * crash JSON.parse and force every call into fallback. We retry once bigger,
+ * strip markdown fences, and report ok:false instead of faking success.
+ */
+async function chatJson(
+  messages: { role: "system" | "user" | "assistant"; content: string }[],
+  opts: { temperature: number; maxTokens: number }
+): Promise<{ ok: boolean; parsed: Record<string, unknown> | null }> {
+  if (!KEY) return { ok: false, parsed: null };
+  for (const max_tokens of [opts.maxTokens, opts.maxTokens + 2000]) {
+    try {
+      const res = await fetch(`${BASE}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
+        body: JSON.stringify({ model: MODEL, messages, temperature: opts.temperature, response_format: { type: "json_object" }, max_tokens }),
+      });
+      if (!res.ok) {
+        console.error("kiraai error", res.status, (await res.text()).slice(0, 300));
+        continue;
+      }
+      const json = await res.json();
+      const text = stripFences(String(json.choices?.[0]?.message?.content || ""));
+      if (!text) continue; // cut off before content — retry with bigger budget
+      try {
+        return { ok: true, parsed: JSON.parse(text) };
+      } catch {
+        const m = text.match(/\{[\s\S]*\}/);
+        if (m) {
+          try {
+            return { ok: true, parsed: JSON.parse(m[0]) };
+          } catch {
+            /* fallthrough to retry */
+          }
+        }
+      }
+    } catch (e) {
+      console.error("kiraai fetch error", e instanceof Error ? e.message : e);
+    }
+  }
+  return { ok: false, parsed: null };
+}
+
 function buildSystemPrompt(businessInfo: string, kbText: string, scripts: ScriptDef[], contact: { name: string; email: string; phone: string }) {
   const scriptsBlock = scripts.length
     ? scripts.map((s) => `- slug:"${s.slug}" name:"${s.name}" when:"${s.description} | triggers: ${s.trigger_keywords}" needs:[${s.required_params.join(",")}]`).join("\n")
@@ -72,6 +120,7 @@ export type ScriptPlanDraft = {
 };
 
 export type ScriptPlanChat = {
+  ok: boolean;
   reply: string;
   mode: "chat" | "plan";
   questions: string[];
@@ -111,12 +160,12 @@ export async function planScriptChat(opts: {
   history: { role: "user" | "assistant"; content: string }[];
 }): Promise<ScriptPlanChat> {
   const fallback: ScriptPlanChat = {
+    ok: false,
     reply: "Tell me what you want automated — e.g. what should trigger it, what info the visitor must give, and what should happen.",
     mode: "chat",
     questions: [],
     plan: null,
   };
-  if (!KEY) return fallback;
 
   const system = `You are Repllyer Architect, a friendly teammate helping a business owner automate a task as a chat script. You hold a CONVERSATION — warm, short messages, at most 2 questions per turn. You NEVER create anything; you only plan.
 
@@ -133,116 +182,42 @@ BEHAVIOR:
 Respond ONLY with valid JSON:
 {"reply":"string","mode":"chat"|"plan","questions":["..."],"plan":null|{"name":"string","description":"string","trigger_keywords":"string","required_params":["email"],"action_type":"code"|"webhook","code_draft":"string","webhook_hint":"string","env_needed":["KEY"]}}`;
 
-  try {
-    const res = await fetch(`${BASE}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: "system", content: system }, ...opts.history.slice(-12)],
-        temperature: 0.5,
-        response_format: { type: "json_object" },
-        max_tokens: 1500,
-      }),
-    });
-    if (!res.ok) {
-      console.error("kiraai plan chat error", res.status, await res.text());
-      return fallback;
-    }
-    const json = await res.json();
-    const parsed = JSON.parse(json.choices?.[0]?.message?.content || "{}");
-    const plan = parsed.mode === "plan" ? sanitizePlanDraft(parsed.plan || {}) : null;
-    return {
-      reply: typeof parsed.reply === "string" && parsed.reply.trim() ? parsed.reply.slice(0, 2000) : fallback.reply,
-      mode: plan ? "plan" : "chat",
-      questions: Array.isArray(parsed.questions) ? parsed.questions.filter((q: unknown) => typeof q === "string").slice(0, 4) : [],
-      plan,
-    };
-  } catch (e) {
-    console.error("kiraai plan chat parse error", e);
-    return fallback;
-  }
+  const { ok, parsed } = await chatJson(
+    [{ role: "system" as const, content: system }, ...opts.history.slice(-12)],
+    { temperature: 0.5, maxTokens: 2500 }
+  );
+  if (!ok || !parsed) return fallback;
+  const plan = parsed.mode === "plan" ? sanitizePlanDraft((parsed.plan || {}) as Record<string, unknown>) : null;
+  return {
+    ok: true,
+    reply: typeof parsed.reply === "string" && parsed.reply.trim() ? parsed.reply.slice(0, 2000) : fallback.reply,
+    mode: plan ? "plan" : "chat",
+    questions: Array.isArray(parsed.questions) ? parsed.questions.filter((q: unknown) => typeof q === "string").slice(0, 4) : [],
+    plan,
+  };
 }
 
-/**
- * AI script architect: plans a client automation BEFORE creating anything.
- * Returns clarifying questions when the task is vague, otherwise a full
- * ready-to-review plan (name, triggers, params, JS code draft, env needed).
- */
+/** Legacy single-shot wrapper — prefer planScriptChat (multi-turn) for new code. */
 export async function planScriptForTask(opts: {
   businessInfo: string;
   existingScripts: { name: string; description: string }[];
   task: string;
   answers?: string;
 }): Promise<ScriptPlan> {
-  const fallback: ScriptPlan = {
-    mode: "questions",
-    questions: ["What should trigger this script? (e.g. which visitor message)", "What info must the visitor provide first? (email, phone, order id…)", "What should happen when it runs? (send an email, call your server…)"],
-    plan: null,
-  };
-  if (!KEY) return fallback;
-
-  const system = `You are Repllyer Architect. A business owner describes a task they want automated as a chat script. You PLAN first — never assume missing details.
-
-BUSINESS: ${opts.businessInfo || "unknown business"}
-EXISTING SCRIPTS (do not duplicate these): ${opts.existingScripts.length ? opts.existingScripts.map((s) => `"${s.name}: ${s.description}"`).join(" | ") : "none yet"}
-
-RULES:
-1. The runtime is sandboxed JavaScript on Vercel: variables available are params (visitor info like params.email), contact ({name,email,phone}), business ({id,name}), script ({slug,name}), env (the owner's secret variables, read as env.KEY). Helpers: sendEmail(to, subject, body), log(...). The author MUST set global result = {...}. No require/process/fetch — external HTTP means action_type "webhook" instead.
-2. required_params may only use: email, phone, name, order_id, username, account_id.
-3. If the task is vague or missing the trigger / required info / outcome, return mode "questions" with 1-3 short specific questions. Do NOT write a plan yet.
-4. If the task is clear (or the owner already answered follow-ups), return mode "plan" with a complete plan: short name, one-line description, comma trigger keywords, required params, action_type ("code" for logic/email, "webhook" when it must hit the owner's server), a working JS code_draft following the runtime contract above (secrets ONLY via env.KEY, never hardcoded), and env_needed listing every env.KEY the code uses.
-5. Never invent credentials, URLs, or API keys. If the outcome needs an external system you know nothing about, prefer "webhook" with a webhook_hint describing the endpoint the owner must provide.
-
-Respond ONLY with valid JSON:
-{"mode":"questions"|"plan","questions":["..."],"plan":null|{"name":"string","description":"string","trigger_keywords":"string","required_params":["email"],"action_type":"code"|"webhook","code_draft":"string","webhook_hint":"string","env_needed":["KEY"]}}`;
-
-  try {
-    const res = await fetch(`${BASE}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${KEY}` },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: `TASK: ${opts.task}${opts.answers ? `\nOWNER ANSWERS: ${opts.answers}` : ""}` },
-        ],
-        temperature: 0.4,
-        response_format: { type: "json_object" },
-        max_tokens: 1500,
-      }),
-    });
-    if (!res.ok) {
-      console.error("kiraai plan error", res.status, await res.text());
-      return fallback;
-    }
-    const json = await res.json();
-    const parsed = JSON.parse(json.choices?.[0]?.message?.content || "{}");
-    const mode = parsed.mode === "plan" ? "plan" : "questions";
-    const questions = Array.isArray(parsed.questions) ? parsed.questions.filter((q: unknown) => typeof q === "string").slice(0, 4) : [];
-    if (mode === "plan" && parsed.plan && typeof parsed.plan.name === "string") {
-      const p = parsed.plan;
-      const allowed = ["email", "phone", "name", "order_id", "username", "account_id"];
-      return {
-        mode,
-        questions: [],
-        plan: {
-          name: String(p.name).slice(0, 80),
-          description: String(p.description || "").slice(0, 1000),
-          trigger_keywords: String(p.trigger_keywords || "").slice(0, 500),
-          required_params: Array.isArray(p.required_params) ? p.required_params.filter((x: unknown) => allowed.includes(x as string)).slice(0, 10) : ["email"],
-          action_type: p.action_type === "webhook" ? "webhook" : "code",
-          code_draft: String(p.code_draft || "").slice(0, 10000),
-          webhook_hint: String(p.webhook_hint || "").slice(0, 500),
-          env_needed: Array.isArray(p.env_needed) ? p.env_needed.filter((x: unknown) => typeof x === "string").map((x: string) => x.toUpperCase().replace(/[^A-Z0-9_]/g, "").slice(0, 64)).filter(Boolean).slice(0, 20) : [],
-        },
-      };
-    }
-    return { mode: "questions", questions: questions.length ? questions : fallback.questions, plan: null };
-  } catch (e) {
-    console.error("kiraai plan parse error", e);
-    return fallback;
+  const chat = await planScriptChat({
+    businessInfo: opts.businessInfo,
+    existingScripts: opts.existingScripts,
+    history: [{ role: "user", content: `TASK: ${opts.task}${opts.answers ? `\nMY ANSWERS: ${opts.answers}` : ""}` }],
+  });
+  if (!chat.ok) {
+    return {
+      mode: "questions",
+      questions: ["Planner is unreachable right now — try again in a minute."],
+      plan: null,
+    };
   }
+  if (chat.mode === "plan" && chat.plan) return { mode: "plan", questions: [], plan: chat.plan };
+  return { mode: "questions", questions: chat.questions.length ? chat.questions : [chat.reply], plan: null };
 }
 
 export async function classifyAndAnswer(opts: {
@@ -262,8 +237,6 @@ export async function classifyAndAnswer(opts: {
     reason: "fallback-answer-first",
   };
 
-  if (!KEY) return fallback;
-
   const system = buildSystemPrompt(opts.businessInfo, opts.kbText, opts.scripts || [], opts.contact || { name: "", email: "", phone: "" });
   const messages = [
     { role: "system" as const, content: system },
@@ -271,45 +244,20 @@ export async function classifyAndAnswer(opts: {
     { role: "user" as const, content: opts.userMessage },
   ];
 
-  try {
-    const res = await fetch(`${BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${KEY}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages,
-        temperature: 0.4,
-        response_format: { type: "json_object" },
-        max_tokens: 900,
-      }),
-    });
+  const { ok, parsed } = await chatJson(messages, { temperature: 0.4, maxTokens: 2000 });
+  if (!ok || !parsed) return fallback;
 
-    if (!res.ok) {
-      console.error("kiraai error", res.status, await res.text());
-      return fallback;
-    }
-    const json = await res.json();
-    const content: string = json.choices?.[0]?.message?.content || "";
-    const parsed = JSON.parse(content);
-
-    return {
-      priority: ["urgent", "high", "medium", "low"].includes(parsed.priority) ? parsed.priority : "medium",
-      topic: typeof parsed.topic === "string" ? parsed.topic.slice(0, 40) : "general",
-      solvable: typeof parsed.solvable === "boolean" ? parsed.solvable : true,
-      confidence: typeof parsed.confidence === "number" ? Math.min(1, Math.max(0, parsed.confidence)) : 0.5,
-      answer: typeof parsed.answer === "string" && parsed.answer.trim() ? parsed.answer : fallback.answer,
-      reason: typeof parsed.reason === "string" ? parsed.reason : "",
-      extracted_email: typeof parsed.extracted_email === "string" ? parsed.extracted_email : "",
-      extracted_name: typeof parsed.extracted_name === "string" ? parsed.extracted_name : "",
-      extracted_phone: typeof parsed.extracted_phone === "string" ? parsed.extracted_phone : "",
-      script_to_run: typeof parsed.script_to_run === "string" ? parsed.script_to_run : "",
-      script_params: typeof parsed.script_params === "object" && parsed.script_params !== null ? parsed.script_params : {},
-    };
-  } catch (e) {
-    console.error("kiraai parse error", e);
-    return fallback;
-  }
+  return {
+    priority: ["urgent", "high", "medium", "low"].includes(parsed.priority as string) ? (parsed.priority as KiraaiClassifyResult["priority"]) : "medium",
+    topic: typeof parsed.topic === "string" ? parsed.topic.slice(0, 40) : "general",
+    solvable: typeof parsed.solvable === "boolean" ? parsed.solvable : true,
+    confidence: typeof parsed.confidence === "number" ? Math.min(1, Math.max(0, parsed.confidence)) : 0.5,
+    answer: typeof parsed.answer === "string" && parsed.answer.trim() ? parsed.answer : fallback.answer,
+    reason: typeof parsed.reason === "string" ? parsed.reason : "",
+    extracted_email: typeof parsed.extracted_email === "string" ? parsed.extracted_email : "",
+    extracted_name: typeof parsed.extracted_name === "string" ? parsed.extracted_name : "",
+    extracted_phone: typeof parsed.extracted_phone === "string" ? parsed.extracted_phone : "",
+    script_to_run: typeof parsed.script_to_run === "string" ? parsed.script_to_run : "",
+    script_params: typeof parsed.script_params === "object" && parsed.script_params !== null ? (parsed.script_params as Record<string, string>) : {},
+  };
 }

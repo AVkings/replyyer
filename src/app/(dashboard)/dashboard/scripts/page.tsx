@@ -307,7 +307,7 @@ export default function Scripts() {
         <div className="flex items-center gap-2">
           <span className="grid h-7 w-7 place-items-center rounded-lg bg-white text-xs font-bold text-black">✦</span>
           <div className="text-sm font-semibold">Chat with the architect</div>
-          <span className="text-[11px] text-zinc-400">free to plan • 30cr only when visitors run it</span>
+          <span className="text-[11px] text-zinc-400">1cr per message • 30cr when visitors run scripts</span>
         </div>
         <div ref={chatRef} className="min-h-[220px] max-h-[380px] overflow-y-auto space-y-3 rounded-xl border border-zinc-800 bg-black/40 p-3">
           {chat.map((m, i) => (
