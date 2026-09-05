@@ -70,6 +70,10 @@ begin
   return v_balance + p_amount;
 end; $$;
 
+-- allow service_role (and authenticated via RPC) to execute
+grant execute on function consume_credits_atomic(uuid, int, text) to service_role, authenticated, anon;
+grant execute on function grant_credits_atomic(uuid, int, text) to service_role, authenticated, anon;
+
 -- 3) Idempotency guard: unique reason per business (prevents double razorpay/giftcard grants)
 create unique index if not exists credits_ledger_business_reason_uidx
   on credits_ledger (business_id, reason)
@@ -106,10 +110,10 @@ do $$ begin
 end $$;
 
 -- api_keys: no client access at all (service_role only)
-do $$ begin
+do $$ declare r record; begin
   -- drop any owner policies on api_keys
-  for r in select policyname from pg_policies where tablename = 'api_keys' and policyname like 'owner%' loop
-    execute format('drop policy %I on api_keys', r.policyname);
+  for r in select policyname, tablename from pg_policies where tablename = 'api_keys' loop
+    execute format('drop policy %I on %I', r.policyname, r.tablename);
   end loop;
 end $$;
 
@@ -117,15 +121,15 @@ end $$;
 -- RLS already enabled with zero policies => deny-all for anon/authenticated. Keep it that way.
 -- Ensure no permissive policies exist:
 do $$ declare r record; begin
-  for r in select policyname from pg_policies where tablename in ('coupons','giftcards') loop
-    execute format('drop policy %I on %I', r.policyname, 'coupons');
+  for r in select policyname, tablename from pg_policies where tablename = 'coupons' loop
+    execute format('drop policy %I on %I', r.policyname, r.tablename);
   end loop;
-exception when others then null; end $$;
+end $$;
 do $$ declare r record; begin
-  for r in select policyname from pg_policies where tablename = 'giftcards' loop
-    execute format('drop policy %I on giftcards', r.policyname);
+  for r in select policyname, tablename from pg_policies where tablename = 'giftcards' loop
+    execute format('drop policy %I on %I', r.policyname, r.tablename);
   end loop;
-exception when others then null; end $$;
+end $$;
 
 -- sessions / messages / tickets / kb: keep owner read+write for dashboard, but credits stay locked
 -- (human reply via dashboard is allowed; it does not touch credits)
