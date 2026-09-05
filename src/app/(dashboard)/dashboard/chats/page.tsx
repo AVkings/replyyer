@@ -1,80 +1,117 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBiz } from "@/components/dashboard/BizContext";
 import { createBrowserClient } from "@/lib/supabase-browser";
 import Link from "next/link";
+import { motion } from "framer-motion";
+import { RepllyerLoader } from "@/components/Loader";
+import { sortByPriority, priorityStyle } from "@/lib/priority";
 
 type SessionRow = { id: string; created_at: string; status: string; end_user_id: string; end_users: { name: string; email: string } | null };
+type TicketRow = { session_id: string; priority: string; topic: string; status: string };
+type MsgRow = { session_id: string; content: string; created_at: string };
 
 export default function Chats() {
   const { selected } = useBiz();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
-  const [apiKey, setApiKey] = useState("");
-  const [name, setName] = useState("Test User");
-  const [email, setEmail] = useState("test@example.com");
-  const [session, setSession] = useState("");
-  const [msg, setMsg] = useState("refund not received?");
-  const [out, setOut] = useState("");
+  const [tickets, setTickets] = useState<TicketRow[]>([]);
+  const [msgs, setMsgs] = useState<MsgRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+
+  const load = async () => {
+    if (!selected) return;
+    setLoading(true);
+    const supa = createBrowserClient();
+    const [s, t, m] = await Promise.all([
+      supa.from("sessions").select("id, created_at, status, end_user_id, end_users(name,email)").eq("business_id", selected).order("created_at", { ascending: false }).limit(100),
+      supa.from("human_tickets").select("session_id, priority, topic, status").eq("business_id", selected).limit(100),
+      supa.from("messages").select("session_id, content, created_at").eq("business_id", selected).order("created_at", { ascending: false }).limit(300),
+    ]);
+    setSessions((s.data as unknown as SessionRow[]) || []);
+    setTickets((t.data as TicketRow[]) || []);
+    setMsgs((m.data as MsgRow[]) || []);
+    setLoading(false);
+  };
 
   useEffect(() => {
-    if (!selected) return;
-    const supa = createBrowserClient();
-    const load = async () => {
-      const { data } = await supa.from("sessions").select("id, created_at, status, end_user_id, end_users(name,email)").eq("business_id", selected).order("created_at", { ascending: false }).limit(30);
-      setSessions((data as unknown as SessionRow[]) || []);
-    };
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
-  async function init() {
-    const r = await fetch("/api/v1/session/init", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": apiKey }, body: JSON.stringify({ name, email }) });
-    const j = await r.json();
-    setOut(JSON.stringify(j, null, 2));
-    if (j.session_id) setSession(j.session_id);
-  }
-  async function chat() {
-    const r = await fetch("/api/v1/chat", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": apiKey }, body: JSON.stringify({ session_id: session, message: msg }) });
-    const j = await r.json();
-    setOut(JSON.stringify(j, null, 2));
-  }
+  const rows = useMemo(() => {
+    const priBySession = new Map<string, TicketRow>();
+    const w: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+    tickets.forEach((t) => {
+      const cur = priBySession.get(t.session_id);
+      if (!cur || (w[t.priority] ?? 4) < (w[cur.priority] ?? 4)) priBySession.set(t.session_id, t);
+    });
+    const lastBy = new Map<string, MsgRow>();
+    msgs.forEach((m) => {
+      if (!lastBy.has(m.session_id)) lastBy.set(m.session_id, m);
+    });
+    return sessions
+      .map((s) => ({
+        ...s,
+        priority: priBySession.get(s.id)?.priority || null,
+        topic: priBySession.get(s.id)?.topic || null,
+        last: lastBy.get(s.id)?.content?.slice(0, 110) || "No messages yet",
+        last_at: lastBy.get(s.id)?.created_at || s.created_at,
+      }))
+      .sort((a, b) => sortByPriority({ priority: a.priority, created_at: a.last_at }, { priority: b.priority, created_at: b.last_at }))
+      .filter((s) => {
+        if (!q.trim()) return true;
+        const v = q.toLowerCase();
+        return (s.end_users?.name || "").toLowerCase().includes(v) || (s.end_users?.email || "").toLowerCase().includes(v) || s.last.toLowerCase().includes(v);
+      });
+  }, [sessions, tickets, msgs, q]);
+
+  if (!selected) return <div className="text-sm text-zinc-500">Select a business in Settings.</div>;
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-lg font-semibold">CRM — Chats & AI transcripts</h1>
-
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
-        <table className="w-full text-xs">
-          <thead className="bg-zinc-50 text-left text-zinc-500"><tr><th className="px-4 py-2">Visitor</th><th>Email</th><th>Status</th><th>Session</th><th>When</th></tr></thead>
-          <tbody>
-            {sessions.map((s) => (
-              <tr key={s.id} className="border-t border-zinc-100 hover:bg-zinc-50">
-                <td className="px-4 py-2">{s.end_users?.name || s.end_user_id.slice(0, 8)}</td>
-                <td className="font-mono text-[11px]">{s.end_users?.email || "—"}</td>
-                <td><span className="rounded-full bg-zinc-100 px-2 py-1 text-[11px]">{s.status}</span></td>
-                <td><Link href={`/dashboard/chats/${s.id}`} className="font-mono text-[11px] underline">{s.id.slice(0, 8)} →</Link></td>
-                <td>{new Date(s.created_at).toLocaleString()}</td>
-              </tr>
-            ))}
-            {sessions.length === 0 && <tr><td colSpan={5} className="py-10 text-center text-zinc-500">No sessions yet.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="rounded-2xl border border-zinc-200 bg-zinc-950 p-5 text-white">
-        <div className="text-sm font-semibold">Playground — no curl needed</div>
-        <div className="mt-3 grid gap-2">
-          <input value={apiKey} onChange={(e)=>setApiKey(e.target.value)} placeholder="rply_live_..." className="rounded-xl bg-zinc-900 px-3 py-2 text-sm" />
-          <div className="grid grid-cols-2 gap-2">
-            <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="name (optional — bot will ask if missing)" className="rounded-xl bg-zinc-900 px-3 py-2 text-sm" />
-            <input value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="email (optional)" className="rounded-xl bg-zinc-900 px-3 py-2 text-sm" />
-          </div>
-          <button onClick={init} className="rounded-full bg-white px-4 py-2 text-xs font-medium text-black">1. Init session</button>
-          <input value={session} onChange={(e)=>setSession(e.target.value)} placeholder="session_id" className="rounded-xl bg-zinc-900 px-3 py-2 font-mono text-xs" />
-          <textarea value={msg} onChange={(e)=>setMsg(e.target.value)} rows={2} className="rounded-xl bg-zinc-900 px-3 py-2 text-sm" />
-          <button onClick={chat} className="rounded-full bg-white px-4 py-2 text-xs font-medium text-black">2. Send chat</button>
-          <pre className="overflow-auto rounded-xl bg-black p-3 text-xs text-lime-300">{out || "output..."}</pre>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h1 className="text-lg font-semibold">CRM — all chats</h1>
+          <p className="text-xs text-zinc-500">{rows.length} conversations • priority first • click to open thread</p>
         </div>
+        <button onClick={load} className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs hover:border-black">Refresh</button>
       </div>
+
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search visitor, email, message…" className="w-full rounded-full border border-zinc-200 bg-white px-4 py-2.5 text-xs outline-none focus:border-black" />
+
+      {loading ? (
+        <RepllyerLoader label="Loading conversations…" />
+      ) : rows.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-zinc-200 bg-white py-12 text-center text-xs text-zinc-500">No chats yet. Point your bot at the API.</div>
+      ) : (
+        <div className="grid gap-2">
+          {rows.map((s, i) => (
+            <motion.div key={s.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i * 0.02, 0.25) }}>
+              <Link href={`/dashboard/chats/${s.id}`} className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white p-4 hover:border-black hover:shadow-sm transition">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-black text-xs font-bold text-white">
+                  {(s.end_users?.name || "G").slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium truncate">{s.end_users?.name || "Guest"}</span>
+                    {s.priority ? (
+                      <span className={`rounded-full px-2 py-0.5 font-mono text-[11px] ${priorityStyle(s.priority)}`}>{s.priority}</span>
+                    ) : (
+                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-500">AI handled</span>
+                    )}
+                    {s.topic && <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 font-mono text-[11px]">{s.topic}</span>}
+                    <span className="rounded-full bg-zinc-50 border border-zinc-100 px-2 py-0.5 text-[11px] text-zinc-500">{s.status}</span>
+                  </div>
+                  <div className="mt-1 truncate text-xs text-zinc-600">{s.last}</div>
+                  <div className="mt-0.5 font-mono text-[11px] text-zinc-400">{s.end_users?.email || "—"} • {new Date(s.last_at).toLocaleString()}</div>
+                </div>
+                <span className="text-zinc-400">→</span>
+              </Link>
+            </motion.div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

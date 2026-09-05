@@ -16,18 +16,27 @@ export async function POST(req: NextRequest) {
   if (!biz) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const normalized = String(code).trim().toUpperCase();
-  const { data: gc } = await supa.from("giftcards").select("id, credits, redeemed").eq("code", normalized).maybeSingle();
-  if (!gc) return NextResponse.json({ error: "invalid giftcard" }, { status: 404 });
-  if (gc.redeemed) return NextResponse.json({ error: "already redeemed" }, { status: 400 });
+  if (!/^[A-Z0-9-]{4,40}$/.test(normalized)) return NextResponse.json({ error: "invalid giftcard" }, { status: 404 });
 
-  // mark redeemed + grant credits atomically (best effort)
-  const { error: updErr } = await supa.from("giftcards").update({ redeemed: true, redeemed_by: business_id }).eq("id", gc.id).eq("redeemed", false);
+  // Atomic claim: only one request can flip redeemed=false -> true
+  const { data: claimed, error: updErr } = await supa
+    .from("giftcards")
+    .update({ redeemed: true, redeemed_by: business_id })
+    .eq("code", normalized)
+    .eq("redeemed", false)
+    .select("id, credits")
+    .maybeSingle();
   if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+  if (!claimed) {
+    // Either invalid or already redeemed — don't reveal which for brute-force resistance
+    const { data: exists } = await supa.from("giftcards").select("id").eq("code", normalized).maybeSingle();
+    if (!exists) return NextResponse.json({ error: "invalid giftcard" }, { status: 404 });
+    return NextResponse.json({ error: "already redeemed" }, { status: 400 });
+  }
+  if (!claimed.credits || claimed.credits <= 0 || claimed.credits > 100000) {
+    return NextResponse.json({ error: "invalid giftcard value" }, { status: 400 });
+  }
 
-  // check if actually updated (race)
-  const { data: after } = await supa.from("giftcards").select("redeemed").eq("id", gc.id).single();
-  if (!after?.redeemed) return NextResponse.json({ error: "redeem failed" }, { status: 500 });
-
-  const bal = await grantCredits(business_id, gc.credits, `giftcard:${normalized}`);
-  return NextResponse.json({ ok: true, credits: gc.credits, balance: bal });
+  const bal = await grantCredits(business_id, claimed.credits, `giftcard:${normalized}`);
+  return NextResponse.json({ ok: true, credits: claimed.credits, balance: bal });
 }
