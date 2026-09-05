@@ -175,8 +175,10 @@ EXISTING SCRIPTS (do not duplicate): ${opts.existingScripts.length ? opts.existi
 RUNTIME (for plans): sandboxed JavaScript on Vercel. Variables: params (visitor info), contact ({name,email,phone}), business ({id,name}), script ({slug,name}), env (owner secrets as env.KEY). Helpers: sendEmail(to, subject, body), log(...). Author sets global result = {...}. No require/process/fetch — external HTTP means action_type "webhook". required_params only from: email, phone, name, order_id, username, account_id. Secrets ONLY via env.KEY, never hardcoded.
 
 BEHAVIOR:
-- If the owner's intent, trigger, required info, or outcome is still unclear, mode "chat": reply conversationally (1-2 short questions), questions = those questions, plan = null.
-- If everything is clear, mode "plan": reply with a 1-2 sentence summary + what secrets they must add, and a complete plan object (working JS code_draft, env_needed for every env.KEY used).
+- If the owner's intent, trigger, required info, or outcome is still unclear, mode "chat": reply conversationally (1-2 short questions AND nothing else — always fill "reply", never leave it empty), questions = those questions, plan = null.
+- If everything is clear (including when the owner just answered your questions, or says "draft now" / "make it"), mode "plan" IN THIS RESPONSE: reply with a 1-2 sentence summary + what secrets they must add, and a complete plan object (working JS code_draft, env_needed for every env.KEY used).
+- NEVER repeat your opening greeting. NEVER ask for information already given above. NEVER return an empty reply.
+- Owner contact details (their email etc.) go in env_needed + read via env.KEY — never hardcode them in code_draft.
 - Never invent credentials, URLs, or API keys. Unknown external system → action_type "webhook" + webhook_hint describing the endpoint they must provide.
 
 Respond ONLY with valid JSON:
@@ -188,13 +190,16 @@ Respond ONLY with valid JSON:
   );
   if (!ok || !parsed) return fallback;
   const plan = parsed.mode === "plan" ? sanitizePlanDraft((parsed.plan || {}) as Record<string, unknown>) : null;
-  return {
-    ok: true,
-    reply: typeof parsed.reply === "string" && parsed.reply.trim() ? parsed.reply.slice(0, 2000) : fallback.reply,
-    mode: plan ? "plan" : "chat",
-    questions: Array.isArray(parsed.questions) ? parsed.questions.filter((q: unknown) => typeof q === "string").slice(0, 4) : [],
-    plan,
-  };
+  const questions = Array.isArray(parsed.questions) ? parsed.questions.filter((q: unknown) => typeof q === "string").slice(0, 4) : [];
+  // Never leak the generic fallback text into a "successful" reply — derive from content instead.
+  let reply = typeof parsed.reply === "string" ? parsed.reply.trim().slice(0, 2000) : "";
+  if (!reply) {
+    if (plan) reply = `Here's my draft plan for "${plan.name}" — review it below.`;
+    else if (questions.length === 1) reply = questions[0];
+    else if (questions.length > 1) reply = "Two quick things:\n" + questions.map((q, i) => `${i + 1}) ${q}`).join("\n");
+    else reply = "Got that — what should trigger it, and what info must the visitor give first?";
+  }
+  return { ok: true, reply, mode: plan ? "plan" : "chat", questions, plan };
 }
 
 /** Legacy single-shot wrapper — prefer planScriptChat (multi-turn) for new code. */

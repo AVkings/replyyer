@@ -129,9 +129,9 @@ export default function Scripts() {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
   }, [chat, chatBusy, tab]);
 
-  async function sendChat(e?: React.FormEvent) {
+  async function sendChat(e?: React.FormEvent, forced?: string) {
     e?.preventDefault();
-    const text = chatInput.trim();
+    const text = (forced ?? chatInput).trim();
     if (!text || chatBusy) return;
     if (!selected) return setMsg("Select a business first.");
     const next = [...chat, { role: "user" as const, text }];
@@ -156,6 +156,16 @@ export default function Scripts() {
     } finally {
       setChatBusy(false);
     }
+  }
+
+  const canDraftNow =
+    !chatBusy && chat.some((m) => m.role === "user") && !chat[chat.length - 1]?.plan;
+
+  function draftNow() {
+    sendChat(
+      undefined,
+      "Please draft the complete script plan NOW using everything I've told you above. Don't ask more questions — make reasonable assumptions and show the full plan."
+    );
   }
 
   function usePlan(plan: {
@@ -340,6 +350,13 @@ export default function Scripts() {
           ))}
           {chatBusy && <div className="pl-1"><TypingDots /></div>}
         </div>
+        {canDraftNow && (
+          <div className="flex justify-end">
+            <button onClick={draftNow} className="rounded-full border border-zinc-600 px-4 py-1.5 text-[11px] text-zinc-300 hover:border-white hover:text-white">
+              Draft the script now →
+            </button>
+          </div>
+        )}
         <form onSubmit={sendChat} className="flex gap-2">
           <input
             value={chatInput}
