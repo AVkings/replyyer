@@ -128,6 +128,85 @@ Respond ONLY with valid JSON:
 {"priority":"urgent|high|medium|low","topic":"string","solvable":bool,"confidence":0-1,"answer":"string","reason":"string","extracted_email":"string or empty","extracted_name":"string or empty","extracted_phone":"string or empty","script_to_run":"slug or empty","script_params":{}}`;
 }
 
+/**
+ * Plain-text chat (NO response_format constraint — reasoning models handle
+ * natural replies far more reliably than strict JSON mode).
+ */
+async function chatNatural(
+  messages: { role: "system" | "user" | "assistant"; content: string }[],
+  opts: { temperature: number; maxTokens: number }
+): Promise<{ ok: boolean; text: string; detail: string }> {
+  if (!KEY) return { ok: false, text: "", detail: "missing api key" };
+  let detail = "unknown";
+  for (const max_tokens of [opts.maxTokens, opts.maxTokens + 2000]) {
+    try {
+      const res = await fetch(`${BASE}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": "Repllyer/1.0 (+https://repllyer.vercel.app)",
+          Authorization: `Bearer ${KEY}`,
+        },
+        body: JSON.stringify({ model: MODEL, messages, temperature: opts.temperature, max_tokens }),
+      });
+      if (!res.ok) {
+        detail = `http ${res.status}: ${(await res.text()).slice(0, 200)}`;
+        console.error("kiraai error", detail);
+        continue;
+      }
+      let text = "";
+      try {
+        const json = await res.json();
+        const choices = (json.choices as { message?: { content?: string } }[] | undefined) || [];
+        text = String(choices[0]?.message?.content || "").trim();
+      } catch {
+        detail = "non-JSON response body";
+        continue;
+      }
+      if (!text) {
+        detail = "empty content (cut off)";
+        continue;
+      }
+      return { ok: true, text, detail: "ok" };
+    } catch (e) {
+      detail = `network: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200);
+      console.error("kiraai fetch error", detail);
+    }
+  }
+  return { ok: false, text: "", detail };
+}
+
+type FencedBlock = { tag: string; code: string; start: number; end: number };
+
+/** Split ```fenced blocks out of chat text (tags like javascript, plan-json). */
+function splitFenced(text: string): FencedBlock[] {
+  const re = /```([^\n`]*)\n?([\s\S]*?)```/g;
+  const blocks: FencedBlock[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    blocks.push({ tag: m[1].trim(), code: m[2], start: m.index, end: m.index + m[0].length });
+  }
+  return blocks;
+}
+
+function tryParseJson(s: string): Record<string, unknown> {
+  const t = stripFences(s.trim());
+  try {
+    return JSON.parse(t);
+  } catch {
+    const m = t.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        return JSON.parse(m[0]);
+      } catch {
+        return {};
+      }
+    }
+    return {};
+  }
+}
+
 export type ScriptPlanDraft = {
   name: string;
   description: string;
@@ -189,39 +268,56 @@ export async function planScriptChat(opts: {
     plan: null,
   };
 
-  const system = `You are Repllyer Architect, a friendly teammate helping a business owner automate a task as a chat script. You hold a CONVERSATION — warm, short messages, at most 2 questions per turn. You NEVER create anything; you only plan.
+  const system = `You are Repllyer Architect, a friendly teammate helping a business owner automate a task as a chat script. Chat naturally like a normal chatbot — short warm messages, at most 2 questions per turn. You NEVER create anything yourself; you draft for review.
 
 BUSINESS: ${opts.businessInfo || "unknown business"}
 EXISTING SCRIPTS (do not duplicate): ${opts.existingScripts.length ? opts.existingScripts.map((s) => `"${s.name}: ${s.description}"`).join(" | ") : "none yet"}
 
-RUNTIME (for plans): sandboxed JavaScript on Vercel. Variables: params (visitor info), contact ({name,email,phone}), business ({id,name}), script ({slug,name}), env (owner secrets as env.KEY). Helpers: sendEmail(to, subject, body), log(...). Author sets global result = {...}. No require/process/fetch — external HTTP means action_type "webhook". required_params only from: email, phone, name, order_id, username, account_id. Secrets ONLY via env.KEY, never hardcoded.
+RUNTIME (for code): sandboxed JavaScript on Vercel. Variables: params (visitor info), contact ({name,email,phone}), business ({id,name}), script ({slug,name}), env (owner secrets as env.KEY). Helpers: sendEmail(to, subject, body), log(...). Author sets global result = {...}. No require/process/fetch — external HTTP means a webhook instead. Secrets ONLY via env.KEY, never hardcoded. required_params only from: email, phone, name, order_id, username, account_id.
 
-BEHAVIOR:
-- If the owner's intent, trigger, required info, or outcome is still unclear, mode "chat": reply conversationally (1-2 short questions AND nothing else — always fill "reply", never leave it empty), questions = those questions, plan = null.
-- If everything is clear (including when the owner just answered your questions, or says "draft now" / "make it"), mode "plan" IN THIS RESPONSE: reply with a 1-2 sentence summary + what secrets they must add, and a complete plan object (working JS code_draft, env_needed for every env.KEY used).
-- NEVER repeat your opening greeting. NEVER ask for information already given above. NEVER return an empty reply.
-- Owner contact details (their email etc.) go in env_needed + read via env.KEY — never hardcode them in code_draft.
-- Never invent credentials, URLs, or API keys. Unknown external system → action_type "webhook" + webhook_hint describing the endpoint they must provide.
+WHEN EVERYTHING IS CLEAR (intent + trigger + required info + outcome — or the owner says "draft now" / "make it"), end your reply with TWO fenced blocks:
+1. Plan metadata, exactly like this (fill every field):
+\`\`\`plan-json
+{"name":"...","description":"...","trigger_keywords":"...","required_params":["email"],"action_type":"code","env_needed":["KEY"]}
+\`\`\`
+2. The full working JavaScript in a \`\`\`javascript block (skip it for webhooks — say the endpoint needed in plain text instead).
 
-Respond ONLY with valid JSON:
-{"reply":"string","mode":"chat"|"plan","questions":["..."],"plan":null|{"name":"string","description":"string","trigger_keywords":"string","required_params":["email"],"action_type":"code"|"webhook","code_draft":"string","webhook_hint":"string","env_needed":["KEY"]}}`;
+RULES: never repeat your greeting, never re-ask answered info, never leave the reply empty. Owner contacts go in env_needed, never hardcoded. Never invent credentials, URLs, or keys. Normal chat text stays OUTSIDE fenced blocks.`;
 
-  const { ok, parsed, detail } = await chatJson(
+  const { ok, text, detail } = await chatNatural(
     [{ role: "system" as const, content: system }, ...opts.history.slice(-12)],
-    { temperature: 0.5, maxTokens: 2500 }
+    { temperature: 0.5, maxTokens: 3000 }
   );
-  if (!ok || !parsed) return { ...fallback, detail };
-  const plan = parsed.mode === "plan" ? sanitizePlanDraft((parsed.plan || {}) as Record<string, unknown>) : null;
-  const questions = Array.isArray(parsed.questions) ? parsed.questions.filter((q: unknown) => typeof q === "string").slice(0, 4) : [];
-  // Never leak the generic fallback text into a "successful" reply — derive from content instead.
-  let reply = typeof parsed.reply === "string" ? parsed.reply.trim().slice(0, 2000) : "";
-  if (!reply) {
-    if (plan) reply = `Here's my draft plan for "${plan.name}" — review it below.`;
-    else if (questions.length === 1) reply = questions[0];
-    else if (questions.length > 1) reply = "Two quick things:\n" + questions.map((q, i) => `${i + 1}) ${q}`).join("\n");
-    else reply = "Got that — what should trigger it, and what info must the visitor give first?";
+  if (!ok) return { ...fallback, detail };
+
+  const blocks = splitFenced(text);
+  const planBlock = blocks.find((b) => b.tag.toLowerCase() === "plan-json") || null;
+  const plan = planBlock ? sanitizePlanDraft(tryParseJson(planBlock.code)) : null;
+  const rest = blocks.filter((b) => b !== planBlock);
+  const jsBlock =
+    rest.find((b) => /^(javascript|js)$/i.test(b.tag)) ||
+    rest.slice().sort((a, b) => b.code.length - a.code.length)[0] ||
+    null;
+  const code = jsBlock ? jsBlock.code.trim().slice(0, 10000) : "";
+
+  if (plan) {
+    const finalPlan = plan.action_type === "code" && code ? { ...plan, code_draft: code } : plan;
+    const consumed = [planBlock, finalPlan.action_type === "code" ? jsBlock : null].filter(
+      (b): b is FencedBlock => b !== null
+    );
+    const ordered = consumed.sort((a, b) => a.start - b.start);
+    let reply = "";
+    let last = 0;
+    for (const b of ordered) {
+      reply += text.slice(last, b.start);
+      last = b.end;
+    }
+    reply += text.slice(last);
+    reply = reply.replace(/\n{3,}/g, "\n\n").trim().slice(0, 2000) || `Here's my draft plan for "${finalPlan.name}" — review it below.`;
+    return { ok: true, detail: "ok", reply, mode: "plan", questions: [], plan: finalPlan };
   }
-  return { ok: true, detail: "ok", reply, mode: plan ? "plan" : "chat", questions, plan };
+  // No plan yet — show the raw message as-is (fences stay visible).
+  return { ok: true, detail: "ok", reply: text.slice(0, 2000), mode: "chat", questions: [], plan: null };
 }
 
 /** Legacy single-shot wrapper — prefer planScriptChat (multi-turn) for new code. */

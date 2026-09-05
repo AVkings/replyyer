@@ -334,7 +334,7 @@ export default function Scripts() {
                     <div className="font-mono text-[11px] text-zinc-400">triggers: {m.plan.trigger_keywords || "—"}</div>
                     <div className="font-mono text-[11px] text-zinc-400">needs: [{m.plan.required_params.join(", ") || "email"}]{m.plan.env_needed.length > 0 && ` • secrets: ${m.plan.env_needed.join(", ")}`}</div>
                     {m.plan.action_type === "code" && m.plan.code_draft && (
-                      <details>
+                      <details open>
                         <summary className="cursor-pointer font-mono text-[11px] text-zinc-400 underline">code draft</summary>
                         <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-black p-2 font-mono text-[11px] leading-4 text-lime-300">{m.plan.code_draft}</pre>
                       </details>
