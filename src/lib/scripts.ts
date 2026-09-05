@@ -27,7 +27,7 @@ export function slugify(name: string): string {
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || `script-${Date.now()}`;
 }
 
-export type OutgoingMail = { to: string; subject: string; body: string };
+export type OutgoingMail = { to: string; subject: string; body: string; html?: boolean };
 
 /**
  * Deliver queued emails via Gmail SMTP using THIS SCRIPT's own credentials:
@@ -51,7 +51,17 @@ export async function flushOutbox(
   const out: (OutgoingMail & { sent: boolean; note?: string; error?: string })[] = [];
   for (const e of emails) {
     try {
-      await transporter.sendMail({ from: user, to: e.to, subject: e.subject, text: e.body });
+      await transporter.sendMail(
+        e.html
+          ? {
+              from: user,
+              to: e.to,
+              subject: e.subject,
+              text: e.body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000),
+              html: e.body,
+            }
+          : { from: user, to: e.to, subject: e.subject, text: e.body }
+      );
       out.push({ ...e, sent: true });
     } catch (err) {
       out.push({ ...e, sent: false, error: err instanceof Error ? err.message.slice(0, 300) : "send failed" });
@@ -60,7 +70,7 @@ export async function flushOutbox(
   return out;
 }
 
-type CodeExecResult = { result: Record<string, unknown>; emails: { to: string; subject: string; body: string }[]; logs: string[] };
+type CodeExecResult = { result: Record<string, unknown>; emails: OutgoingMail[]; logs: string[] };
 
 /**
  * Run client JS code in a sandbox.
@@ -94,12 +104,16 @@ async function runClientCode(opts: {
     log: (...args: unknown[]) => {
       logs.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ").slice(0, 1000));
     },
-    sendEmail: (to: unknown, subject: unknown, body: unknown) => {
+    sendEmail: (to: unknown, subject: unknown, body: unknown, opts?: unknown) => {
       const t = String(to || "").trim();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) throw new Error(`sendEmail: invalid to address "${t}"`);
-      const mail = { to: t, subject: String(subject || `Your ${script.name} request`), body: String(body || "") };
+      const text = String(body || "");
+      const o = (opts && typeof opts === "object" ? opts : {}) as { html?: boolean };
+      // Styled HTML is auto-detected; pass { html: true/false } to override.
+      const html = typeof o.html === "boolean" ? o.html : /<\s*(!doctype|html|body|div|table|p|h1|span|a)\b/i.test(text);
+      const mail = { to: t, subject: String(subject || `Your ${script.name} request`), body: text, html };
       emails.push(mail);
-      return { sent: true, ...mail, note: "logged; connect SMTP/Resend for real delivery" };
+      return { sent: true, to: mail.to, subject: mail.subject, html, note: "queued for delivery" };
     },
   };
   // Convenience alias used in docs

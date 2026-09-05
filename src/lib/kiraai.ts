@@ -282,11 +282,13 @@ WHEN EVERYTHING IS CLEAR (intent + trigger + required info + outcome — or the 
 \`\`\`
 2. The full working JavaScript in a \`\`\`javascript block (skip it for webhooks — say the endpoint needed in plain text instead).
 
-RULES: never repeat your greeting, never re-ask answered info, never leave the reply empty. Owner contacts go in env_needed, never hardcoded. Never invent credentials, URLs, or keys. Normal chat text stays OUTSIDE fenced blocks.`;
+RULES: never repeat your greeting, never re-ask answered info, never leave the reply empty. Owner contacts go in env_needed, never hardcoded. Never invent credentials, URLs, or keys. Normal chat text stays OUTSIDE fenced blocks.
+EMAIL RULES: sendEmail(to, subject, body) sends through the script's saved Gmail settings automatically — the ONLY credential names that exist are GMAIL_USER and GMAIL_APP_PASSWORD (already saved in settings, never write them in code). Never invent names like GMAIL_EMAIL or GMAIL_APP_PASS. Owner recipient addresses (e.g. OWNER_EMAIL) go in env_needed and are read via env.OWNER_EMAIL. HTML email is supported: sendEmail auto-detects styled HTML bodies.
+CODE RULES: keep drafts compact but ALWAYS complete — never truncate a template literal or leave blocks unclosed. Prefer small CSS (under ~30 lines) over long stylesheets. Every sendEmail call must be followed by result = {...} summarizing what was sent.`;
 
   const { ok, text, detail } = await chatNatural(
     [{ role: "system" as const, content: system }, ...opts.history.slice(-12)],
-    { temperature: 0.5, maxTokens: 3000 }
+    { temperature: 0.5, maxTokens: 4000 }
   );
   if (!ok) return { ...fallback, detail };
 
