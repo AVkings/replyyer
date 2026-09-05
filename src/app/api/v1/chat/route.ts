@@ -59,21 +59,21 @@ export async function POST(req: NextRequest) {
     content: message,
   });
 
-  // Try to retrieve name/email from message if end_user is still guest (no real email)
-  const { data: eu } = await supa.from("end_users").select("name, email").eq("id", session.end_user_id).maybeSingle();
+  // Try to retrieve name/email/phone from message if end_user is still guest
+  const { data: eu } = await supa.from("end_users").select("name, email, phone").eq("id", session.end_user_id).maybeSingle() as { data: { name: string; email: string; phone: string | null } | null };
   const isGuest = !eu || eu.email.endsWith("@repllyer.local") || eu.name === "Guest";
+  const contactNow = { name: eu?.name || "", email: eu?.email || "", phone: eu?.phone || "" };
   if (isGuest) {
     const emailMatch = message.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-    const nameHint = message.match(/(?:my name is|i am|i'm)\s+([A-Za-z ]{2,30})/i);
+    const nameHint = message.match(/(?:my name is|i am|i'm|this is)\s+([A-Za-z ]{2,30})/i);
+    const phoneMatch = message.match(/(?:\+?91[\s-]?)?[6-9]\d{9}/);
     const updates: Record<string, string> = {};
     if (emailMatch) updates.email = emailMatch[0].toLowerCase();
     if (nameHint) updates.name = nameHint[1].trim();
-    // Heuristic: if message is just "John" and guest, treat as name
-    if (!emailMatch && !nameHint && message.trim().split(" ").length <= 3 && message.length <= 30 && /^[A-Za-z ]+$/.test(message.trim())) {
-      // don't auto-overwrite if already non-guest, but heuristic asks AI to confirm
-    }
+    if (phoneMatch) updates.phone = phoneMatch[0].replace(/[\s-]/g, "");
     if (Object.keys(updates).length) {
       await supa.from("end_users").update(updates).eq("id", session.end_user_id);
+      Object.assign(contactNow, updates);
     }
   }
 
@@ -95,26 +95,69 @@ export async function POST(req: NextRequest) {
     .slice(-10)
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
+  // Load active scripts for this business (playground actions, 30cr/run)
+  const { data: scriptRows } = await supa
+    .from("business_scripts")
+    .select("id, business_id, name, slug, description, trigger_keywords, required_params, action_type, action_config")
+    .eq("business_id", keyData.business_id)
+    .eq("is_active", true)
+    .limit(20);
+
   const resultRaw = await classifyAndAnswer({
     businessInfo: biz ? `${biz.name}\n${biz.description || ""}` : "",
     kbText,
     history,
     userMessage: message,
+    scripts: (scriptRows || []).map((s) => ({
+      slug: (s as { slug: string }).slug,
+      name: (s as { name: string }).name,
+      description: (s as { description: string }).description || "",
+      trigger_keywords: (s as { trigger_keywords: string }).trigger_keywords || "",
+      required_params: ((s as { required_params: string[] }).required_params || []) as string[],
+    })),
+    contact: contactNow,
   });
-  // kiraai may return extracted_email/name per new prompt
-  const result: typeof resultRaw & { extracted_email?: string; extracted_name?: string } = resultRaw as unknown as typeof resultRaw & { extracted_email?: string; extracted_name?: string };
-  // Prefer AI-extracted contact if we are still guest
+  const result = resultRaw;
+  // Prefer AI-extracted contact if we are still guest (email + phone + name)
   const aiEmail = (result.extracted_email || "").trim();
   const aiName = (result.extracted_name || "").trim();
-  if (aiEmail || aiName) {
+  const aiPhone = (result.extracted_phone || "").trim().replace(/[\s-]/g, "");
+  if (aiEmail || aiName || aiPhone) {
     const upd: Record<string, string> = {};
     if (aiEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(aiEmail)) upd.email = aiEmail.toLowerCase();
     if (aiName && aiName.length >= 2 && aiName.length <= 60) upd.name = aiName;
-    if (Object.keys(upd).length) await supa.from("end_users").update(upd).eq("id", session.end_user_id);
+    if (aiPhone && /^(?:\+?91)?[6-9]\d{9}$/.test(aiPhone)) upd.phone = aiPhone;
+    if (Object.keys(upd).length) {
+      await supa.from("end_users").update(upd).eq("id", session.end_user_id);
+      Object.assign(contactNow, upd);
+    }
   }
 
-  // Decide human handoff: not solvable OR confidence < 0.72 OR urgent with low confidence
-  const needsHuman = !result.solvable || result.confidence < 0.72;
+  // Answer-first escalation: AI was instructed to try. Only escalate when it says unsolvable.
+  const needsHuman = !result.solvable;
+
+  // Script execution (30 credits): only when AI requested + contact/params verified
+  let scriptRun: { slug: string; ok: boolean; result: Record<string, unknown> } | null = null;
+  let scriptCreditsRemaining = credits_remaining;
+  if (result.script_to_run) {
+    const { runScript, SCRIPT_RUN_COST } = await import("@/lib/scripts");
+    const match = (scriptRows || []).find((s) => (s as { slug: string }).slug === result.script_to_run);
+    if (match) {
+      const s = match as unknown as import("@/lib/scripts").ScriptRow;
+      // Merge AI params with known contact so email/phone don't need re-asking
+      const merged: Record<string, string> = { ...(result.script_params || {}) };
+      if (!merged.email && contactNow.email && !contactNow.email.endsWith("@repllyer.local")) merged.email = contactNow.email;
+      if (!merged.phone && contactNow.phone) merged.phone = contactNow.phone;
+      if (!merged.name && contactNow.name && contactNow.name !== "Guest") merged.name = contactNow.name;
+      const missing = (s.required_params || []).filter((p) => !merged[p]);
+      if (missing.length === 0) {
+        // Save user-visible message first so we have a message_id? runScript logs without message_id (nullable) — fine
+        const exec = await runScript({ businessId: keyData.business_id, script: s, sessionId: session_id, params: merged });
+        scriptCreditsRemaining = (await getBalance(keyData.business_id).catch(() => credits_remaining - SCRIPT_RUN_COST));
+        scriptRun = { slug: s.slug, ok: exec.ok, result: exec.result };
+      }
+    }
+  }
 
   if (needsHuman) {
     const { data: ticket } = await supa
@@ -139,6 +182,7 @@ export async function POST(req: NextRequest) {
       content: result.answer,
     });
 
+    const finalCredits = scriptRun ? scriptCreditsRemaining : credits_remaining;
     return NextResponse.json(
       {
         status: "human_required" as const,
@@ -147,13 +191,14 @@ export async function POST(req: NextRequest) {
         topic: result.topic,
         answer: result.answer,
         confidence: result.confidence,
-        credits_remaining,
+        credits_remaining: finalCredits,
+        script_run: scriptRun,
       },
       { headers: corsHeaders() }
     );
   }
 
-  // Auto-resolved
+  // Auto-resolved (answer-first: AI tried, script may have run)
   await supa.from("messages").insert({
     session_id,
     business_id: keyData.business_id,
@@ -168,7 +213,8 @@ export async function POST(req: NextRequest) {
       priority: result.priority,
       topic: result.topic,
       confidence: result.confidence,
-      credits_remaining,
+      credits_remaining: scriptRun ? scriptCreditsRemaining : credits_remaining,
+      script_run: scriptRun,
     },
     { headers: corsHeaders() }
   );

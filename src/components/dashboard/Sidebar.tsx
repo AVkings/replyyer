@@ -7,6 +7,7 @@ const nav = [
   { href: "/dashboard/inbox", label: "Inbox", icon: "✉" },
   { href: "/dashboard/chats", label: "CRM • Chats", icon: "◈" },
   { href: "/dashboard/knowledge", label: "Knowledge", icon: "≡" },
+  { href: "/dashboard/scripts", label: "Scripts • 30cr", icon: "⚡" },
   { href: "/dashboard/billing", label: "Billing & Credits", icon: "₹" },
   { href: "/dashboard/settings", label: "Settings", icon: "⚙" },
 ];

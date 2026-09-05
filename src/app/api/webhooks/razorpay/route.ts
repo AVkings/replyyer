@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyRazorpayWebhook } from "@/lib/razorpay";
 import { createServiceClient } from "@/lib/supabase";
-import { grantCredits } from "@/lib/credits";
+import { grantForPaidOrder } from "@/lib/payments";
 
 export async function POST(req: NextRequest) {
   const raw = await req.text();
@@ -21,57 +21,60 @@ export async function POST(req: NextRequest) {
   }
 
   const event = evt.event as string;
-  if (event === "payment.captured" || event === "order.paid") {
+  if (event === "payment.captured" || event === "order.paid" || event === "payment.authorized") {
     const payload = evt.payload as Record<string, unknown>;
     const payment = (payload?.payment as Record<string, unknown>)?.entity as Record<string, unknown> | undefined;
-    const notes = (payment?.notes as Record<string, string>) || {};
-    const businessId = notes.business_id as string | undefined;
-    const creditsStr = notes.credits as string | undefined;
-    const credits = creditsStr ? parseInt(creditsStr, 10) : 0;
+    const orderEntity = (payload?.order as Record<string, unknown>)?.entity as Record<string, unknown> | undefined;
+    let notes = (payment?.notes as Record<string, string>) || {};
     const paymentId = String(payment?.id || "");
-    const paidAmount = Number((payment as Record<string, unknown>)?.amount || 0); // paise
+    const razorpayOrderId = String(payment?.order_id || orderEntity?.id || "");
+    const paidAmount = Number(payment?.amount || 0); // paise
 
-    if (!businessId || !credits || credits <= 0 || credits > 100000 || !paymentId) {
+    const supa = createServiceClient();
+
+    // Fallback: if payment notes are empty (frontend overrode notes), use our orders table
+    if ((!notes.business_id || !notes.credits) && razorpayOrderId) {
+      const { data: ord } = await supa
+        .from("orders")
+        .select("business_id, credits, pack_id, coupon, discount_paise")
+        .eq("razorpay_order_id", razorpayOrderId)
+        .maybeSingle();
+      if (ord) {
+        notes = {
+          business_id: (ord as { business_id: string }).business_id,
+          credits: String((ord as { credits: number }).credits),
+          pack_id: (ord as { pack_id: string }).pack_id,
+          coupon: (ord as { coupon: string | null }).coupon || "",
+          discount: String((ord as { discount_paise: number }).discount_paise || 0),
+        };
+      }
+    }
+
+    const businessId = notes.business_id as string | undefined;
+    const credits = parseInt(String(notes.credits || "0"), 10) || 0;
+    const packId = (notes.pack_id as string | undefined) || "";
+    const discount = Math.max(0, parseInt(String(notes.discount || "0"), 10) || 0);
+    const coupon = (notes.coupon as string | undefined)?.toUpperCase() || undefined;
+
+    if (!businessId || !credits || !paymentId) {
       return NextResponse.json({ ok: true, skipped: "invalid payload" });
     }
 
-    // Verify amount matches a real pack (minus coupon) — prevents forged notes
-    const { CREDIT_PACKS } = await import("@/lib/razorpay");
-    const packId = notes.pack_id as string | undefined;
-    const pack = CREDIT_PACKS.find((p) => p.id === packId);
-    if (!pack || pack.credits !== credits) {
-      return NextResponse.json({ ok: true, skipped: "pack mismatch" });
-    }
-    const discount = Math.max(0, parseInt(String(notes.discount || "0"), 10) || 0);
-    const expectedMin = Math.max(100, pack.amountPaise - discount);
-    // Allow small tolerance (fees/rounding) but never accept underpay
-    if (paidAmount < expectedMin) {
-      return NextResponse.json({ ok: true, skipped: "underpaid" });
-    }
-
-    const supa = createServiceClient();
-    const { data: biz } = await supa.from("businesses").select("id").eq("id", businessId).maybeSingle();
-    if (!biz) return NextResponse.json({ ok: true, skipped: "no business" });
-
-    // Idempotent grant — same paymentId can never credit twice
     try {
-      await grantCredits(businessId, credits, `razorpay:${paymentId}`);
+      const res = await grantForPaidOrder({
+        businessId,
+        credits,
+        packId,
+        discountPaise: discount,
+        paidAmountPaise: paidAmount,
+        paymentId,
+        razorpayOrderId: razorpayOrderId || undefined,
+        coupon,
+      });
+      return NextResponse.json({ ok: true, ...res });
     } catch (e) {
-      // unique violation means already credited — safe to ignore
-      const msg = e instanceof Error ? e.message : String(e);
-      if (!msg.includes("duplicate") && !msg.includes("unique")) throw e;
-    }
-    const coupon = notes.coupon as string | undefined;
-    if (coupon) {
-      // Atomic-ish increment with max_uses guard
-      const { data: c } = await supa
-        .from("coupons")
-        .select("id, uses, max_uses")
-        .eq("code", coupon)
-        .maybeSingle();
-      if (c && (!c.max_uses || (c.uses || 0) < c.max_uses)) {
-        await supa.from("coupons").update({ uses: (c.uses || 0) + 1 }).eq("id", c.id);
-      }
+      console.error("webhook grant failed", e);
+      return NextResponse.json({ ok: true, skipped: "grant error, will retry" });
     }
   }
 
