@@ -61,9 +61,9 @@ export async function POST(req: NextRequest) {
     history,
   });
 
-  // Provider down/blocked → honest error, NO charge, NO fake looping reply
+  // Provider down/blocked → honest error with diagnosis, NO charge, NO fake looping reply
   if (!out.ok) {
-    return NextResponse.json({ error: "AI planner is unreachable right now — try again in a minute. No credits used." }, { status: 503 });
+    return NextResponse.json({ error: `AI planner unreachable (${out.detail}) — try again in a minute. No credits used.` }, { status: 503 });
   }
 
   const consumed = await consumeCredit(business_id, "ai_plan_chat");

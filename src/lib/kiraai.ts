@@ -37,8 +37,9 @@ function stripFences(s: string): string {
 async function chatJson(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
   opts: { temperature: number; maxTokens: number }
-): Promise<{ ok: boolean; parsed: Record<string, unknown> | null }> {
-  if (!KEY) return { ok: false, parsed: null };
+): Promise<{ ok: boolean; parsed: Record<string, unknown> | null; detail: string }> {
+  if (!KEY) return { ok: false, parsed: null, detail: "missing api key" };
+  let detail = "unknown";
   for (const max_tokens of [opts.maxTokens, opts.maxTokens + 2000]) {
     try {
       const res = await fetch(`${BASE}/chat/completions`, {
@@ -47,29 +48,43 @@ async function chatJson(
         body: JSON.stringify({ model: MODEL, messages, temperature: opts.temperature, response_format: { type: "json_object" }, max_tokens }),
       });
       if (!res.ok) {
-        console.error("kiraai error", res.status, (await res.text()).slice(0, 300));
+        detail = `http ${res.status}: ${(await res.text()).slice(0, 200)}`;
+        console.error("kiraai error", detail);
         continue;
       }
-      const json = await res.json();
-      const text = stripFences(String(json.choices?.[0]?.message?.content || ""));
-      if (!text) continue; // cut off before content — retry with bigger budget
+      let json: Record<string, unknown>;
       try {
-        return { ok: true, parsed: JSON.parse(text) };
+        json = await res.json();
+      } catch {
+        detail = "non-JSON response body";
+        continue;
+      }
+      const choices = (json.choices as { message?: { content?: string } }[] | undefined) || [];
+      const text = stripFences(String(choices[0]?.message?.content || ""));
+      if (!text) {
+        detail = "empty content (cut off)";
+        continue; // cut off before content — retry with bigger budget
+      }
+      try {
+        return { ok: true, parsed: JSON.parse(text), detail: "ok" };
       } catch {
         const m = text.match(/\{[\s\S]*\}/);
         if (m) {
           try {
-            return { ok: true, parsed: JSON.parse(m[0]) };
+            return { ok: true, parsed: JSON.parse(m[0]), detail: "ok" };
           } catch {
-            /* fallthrough to retry */
+            detail = "unparseable content";
           }
+        } else {
+          detail = "unparseable content";
         }
       }
     } catch (e) {
-      console.error("kiraai fetch error", e instanceof Error ? e.message : e);
+      detail = `network: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200);
+      console.error("kiraai fetch error", detail);
     }
   }
-  return { ok: false, parsed: null };
+  return { ok: false, parsed: null, detail };
 }
 
 function buildSystemPrompt(businessInfo: string, kbText: string, scripts: ScriptDef[], contact: { name: string; email: string; phone: string }) {
@@ -121,6 +136,7 @@ export type ScriptPlanDraft = {
 
 export type ScriptPlanChat = {
   ok: boolean;
+  detail: string;
   reply: string;
   mode: "chat" | "plan";
   questions: string[];
@@ -161,6 +177,7 @@ export async function planScriptChat(opts: {
 }): Promise<ScriptPlanChat> {
   const fallback: ScriptPlanChat = {
     ok: false,
+    detail: "unreachable",
     reply: "Tell me what you want automated — e.g. what should trigger it, what info the visitor must give, and what should happen.",
     mode: "chat",
     questions: [],
@@ -184,11 +201,11 @@ BEHAVIOR:
 Respond ONLY with valid JSON:
 {"reply":"string","mode":"chat"|"plan","questions":["..."],"plan":null|{"name":"string","description":"string","trigger_keywords":"string","required_params":["email"],"action_type":"code"|"webhook","code_draft":"string","webhook_hint":"string","env_needed":["KEY"]}}`;
 
-  const { ok, parsed } = await chatJson(
+  const { ok, parsed, detail } = await chatJson(
     [{ role: "system" as const, content: system }, ...opts.history.slice(-12)],
     { temperature: 0.5, maxTokens: 2500 }
   );
-  if (!ok || !parsed) return fallback;
+  if (!ok || !parsed) return { ...fallback, detail };
   const plan = parsed.mode === "plan" ? sanitizePlanDraft((parsed.plan || {}) as Record<string, unknown>) : null;
   const questions = Array.isArray(parsed.questions) ? parsed.questions.filter((q: unknown) => typeof q === "string").slice(0, 4) : [];
   // Never leak the generic fallback text into a "successful" reply — derive from content instead.
@@ -199,7 +216,7 @@ Respond ONLY with valid JSON:
     else if (questions.length > 1) reply = "Two quick things:\n" + questions.map((q, i) => `${i + 1}) ${q}`).join("\n");
     else reply = "Got that — what should trigger it, and what info must the visitor give first?";
   }
-  return { ok: true, reply, mode: plan ? "plan" : "chat", questions, plan };
+  return { ok: true, detail: "ok", reply, mode: plan ? "plan" : "chat", questions, plan };
 }
 
 /** Legacy single-shot wrapper — prefer planScriptChat (multi-turn) for new code. */
