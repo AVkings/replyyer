@@ -10,11 +10,26 @@ type Script = {
   description: string;
   trigger_keywords: string;
   required_params: string[];
-  action_type: "send_email" | "webhook" | "mock";
+  action_type: "send_email" | "webhook" | "mock" | "code";
   action_config: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
 };
+
+const CODE_TEMPLATE = `// Variables: params (params.email, params.phone...), contact ({name,email,phone}),
+// business ({id, name}), script ({slug, name})
+// Helpers: sendEmail(to, subject, body), log(...)
+// Set: result = {...} to return data.
+
+if (!params.email) throw new Error("email required");
+
+sendEmail(
+  params.email,
+  "Reset your password",
+  "Hi " + (contact.name || "there") + ",\\n\\nClick here to reset your password. Link expires in 30 minutes."
+);
+
+result = { emailed: params.email, action: "password-reset-sent" };`;
 
 const PARAM_OPTIONS = ["email", "phone", "name", "order_id", "username", "account_id"];
 
@@ -23,7 +38,7 @@ export default function Scripts() {
   const [scripts, setScripts] = useState<Script[]>([]);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", trigger_keywords: "", required_params: ["email"], action_type: "send_email" as Script["action_type"], webhook_url: "", email_subject: "", email_template: "" });
+  const [form, setForm] = useState({ name: "", description: "", trigger_keywords: "", required_params: ["email"], action_type: "code" as Script["action_type"], webhook_url: "", email_subject: "", email_template: "", code: CODE_TEMPLATE });
 
   const load = async () => {
     if (!selected) return;
@@ -47,6 +62,7 @@ export default function Scripts() {
       const action_config: Record<string, unknown> =
         form.action_type === "webhook" ? { url: form.webhook_url.trim(), method: "POST" }
         : form.action_type === "send_email" ? { subject: form.email_subject.trim() || undefined, template: form.email_template.trim() || undefined }
+        : form.action_type === "code" ? { code: form.code, language: "javascript" }
         : {};
       const r = await fetch("/api/scripts", {
         method: "POST",
@@ -64,7 +80,7 @@ export default function Scripts() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "create failed");
       setMsg(`Script "${j.script.name}" created. AI will run it for 30 credits when info is verified.`);
-      setForm({ name: "", description: "", trigger_keywords: "", required_params: ["email"], action_type: "send_email", webhook_url: "", email_subject: "", email_template: "" });
+      setForm({ name: "", description: "", trigger_keywords: "", required_params: ["email"], action_type: "code", webhook_url: "", email_subject: "", email_template: "", code: CODE_TEMPLATE });
       load();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "create failed");
@@ -108,11 +124,21 @@ export default function Scripts() {
             ))}
           </div>
         </div>
-        <div className="grid gap-2 md:grid-cols-3">
-          {(["send_email", "webhook", "mock"] as const).map((a) => (
+        <div className="grid gap-2 md:grid-cols-4">
+          {(["code", "send_email", "webhook", "mock"] as const).map((a) => (
             <button key={a} type="button" onClick={() => setForm({ ...form, action_type: a })} className={`rounded-xl border px-3 py-2 text-xs font-mono ${form.action_type === a ? "bg-black text-white border-black" : "border-zinc-200"}`}>{a}</button>
           ))}
         </div>
+        {form.action_type === "code" && (
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-zinc-500">JavaScript code — variables: <code className="font-mono">params.email</code>, <code className="font-mono">contact.name</code>, <code className="font-mono">business.name</code> • helpers: <code className="font-mono">sendEmail(to, subject, body)</code>, <code className="font-mono">log()</code> • set <code className="font-mono">result = {"{...}"}</code></div>
+              <button type="button" onClick={() => setForm({ ...form, code: CODE_TEMPLATE })} className="text-[11px] underline shrink-0">Reset template</button>
+            </div>
+            <textarea value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} rows={14} spellCheck={false} className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs leading-5 text-lime-300 outline-none focus:border-black" placeholder="// your code here" />
+            <div className="mt-1 text-[11px] text-zinc-500">{form.code.length}/10000 chars • runs sandboxed (no network except webhook type) • 30 credits per run • Python not supported on serverless — JS covers the same logic</div>
+          </div>
+        )}
         {form.action_type === "webhook" && (
           <input value={form.webhook_url} onChange={(e) => setForm({ ...form, webhook_url: e.target.value })} placeholder="https://your-server.com/reset-password" className="w-full rounded-xl border border-zinc-200 px-3 py-2 font-mono text-sm" />
         )}

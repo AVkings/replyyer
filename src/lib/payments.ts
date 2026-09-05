@@ -63,3 +63,10 @@ export async function fetchRazorpayPayment(paymentId: string) {
   const payment = (await rzp.payments.fetch(paymentId)) as unknown as Record<string, unknown>;
   return payment;
 }
+
+/** Fetch order from Razorpay API — fallback source of truth when our orders row is missing. */
+export async function fetchRazorpayOrder(orderId: string) {
+  const rzp = getRazorpay();
+  const order = (await rzp.orders.fetch(orderId)) as unknown as Record<string, unknown>;
+  return order;
+}

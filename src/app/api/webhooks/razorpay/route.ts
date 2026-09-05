@@ -34,19 +34,23 @@ export async function POST(req: NextRequest) {
 
     // Fallback: if payment notes are empty (frontend overrode notes), use our orders table
     if ((!notes.business_id || !notes.credits) && razorpayOrderId) {
-      const { data: ord } = await supa
-        .from("orders")
-        .select("business_id, credits, pack_id, coupon, discount_paise")
-        .eq("razorpay_order_id", razorpayOrderId)
-        .maybeSingle();
-      if (ord) {
-        notes = {
-          business_id: (ord as { business_id: string }).business_id,
-          credits: String((ord as { credits: number }).credits),
-          pack_id: (ord as { pack_id: string }).pack_id,
-          coupon: (ord as { coupon: string | null }).coupon || "",
-          discount: String((ord as { discount_paise: number }).discount_paise || 0),
-        };
+      try {
+        const { data: ord } = await supa
+          .from("orders")
+          .select("business_id, credits, pack_id, coupon, discount_paise")
+          .eq("razorpay_order_id", razorpayOrderId)
+          .maybeSingle();
+        if (ord) {
+          notes = {
+            business_id: (ord as { business_id: string }).business_id,
+            credits: String((ord as { credits: number }).credits),
+            pack_id: (ord as { pack_id: string }).pack_id,
+            coupon: (ord as { coupon: string | null }).coupon || "",
+            discount: String((ord as { discount_paise: number }).discount_paise || 0),
+          };
+        }
+      } catch (e) {
+        console.error("webhook: orders fallback failed (migration missing?)", e instanceof Error ? e.message : e);
       }
     }
 

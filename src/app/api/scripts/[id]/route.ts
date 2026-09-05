@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase, createServiceClient } from "@/lib/supabase";
+import { SCRIPT_CODE_MAX } from "@/lib/scripts";
 import { z } from "zod";
 
 const Patch = z.object({
@@ -8,7 +9,7 @@ const Patch = z.object({
   description: z.string().max(1000).optional(),
   trigger_keywords: z.string().max(500).optional(),
   required_params: z.array(z.string()).max(10).optional(),
-  action_type: z.enum(["send_email", "webhook", "mock"]).optional(),
+  action_type: z.enum(["send_email", "webhook", "mock", "code"]).optional(),
   action_config: z.record(z.string(), z.unknown()).optional(),
   is_active: z.boolean().optional(),
 });
@@ -37,7 +38,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     patch.required_params = [...new Set(parsed.data.required_params.map((p) => p.trim().toLowerCase()))].filter((p) => ["email", "phone", "name", "order_id", "username", "account_id"].includes(p));
   }
   if (parsed.data.action_type) patch.action_type = parsed.data.action_type;
-  if (parsed.data.action_config) patch.action_config = parsed.data.action_config;
+  if (parsed.data.action_config) {
+    const cfg = parsed.data.action_config as Record<string, unknown>;
+    const effectiveType = parsed.data.action_type;
+    if (effectiveType === "code" || (!effectiveType && cfg.code !== undefined)) {
+      const code = String(cfg.code || "");
+      if (!code.trim()) return NextResponse.json({ error: "code is required for code scripts" }, { status: 400 });
+      if (code.length > SCRIPT_CODE_MAX) return NextResponse.json({ error: `code too long (max ${SCRIPT_CODE_MAX} chars)` }, { status: 400 });
+      if (cfg.language && cfg.language !== "javascript") return NextResponse.json({ error: "only javascript supported" }, { status: 400 });
+    }
+    patch.action_config = parsed.data.action_config;
+  }
   if (parsed.data.is_active !== undefined) patch.is_active = parsed.data.is_active;
 
   const { data, error } = await service.from("business_scripts").update(patch).eq("id", id).eq("business_id", parsed.data.business_id).select("*").single();

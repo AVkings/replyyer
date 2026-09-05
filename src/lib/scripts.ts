@@ -1,7 +1,12 @@
 import { createServiceClient } from "./supabase";
 import { consumeCreditsExact } from "./credits";
+import vm from "node:vm";
 
 export const SCRIPT_RUN_COST = 30;
+export const SCRIPT_CODE_MAX = 10000;
+export const SCRIPT_RUN_TIMEOUT_MS = 8000;
+
+export type ScriptActionType = "send_email" | "webhook" | "mock" | "code";
 
 export type ScriptRow = {
   id: string;
@@ -11,7 +16,7 @@ export type ScriptRow = {
   description: string;
   trigger_keywords: string;
   required_params: string[];
-  action_type: "send_email" | "webhook" | "mock";
+  action_type: ScriptActionType;
   action_config: Record<string, unknown>;
   is_active: boolean;
 };
@@ -20,14 +25,70 @@ export function slugify(name: string): string {
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || `script-${Date.now()}`;
 }
 
-/** Execute a script: charge 30cr, perform action, log run. Idempotent per message+script. */
+type CodeExecResult = { result: Record<string, unknown>; emails: { to: string; subject: string; body: string }[]; logs: string[] };
+
+/**
+ * Run client JS code in a sandbox.
+ * Available variables: params, contact {name,email,phone}, business {id,name}, script {slug,name}.
+ * Helpers: sendEmail(to, subject, body), log(...). Set global `result = {...}` to return data.
+ * No require/process/fetch — use the `webhook` action type for external HTTP.
+ */
+async function runClientCode(opts: {
+  code: string;
+  params: Record<string, string>;
+  contact: { name: string; email: string; phone: string };
+  business: { id: string; name: string };
+  script: { slug: string; name: string };
+}): Promise<CodeExecResult> {
+  const { code, params, contact, business, script } = opts;
+  if (!code.trim()) throw new Error("code is empty");
+  if (code.length > SCRIPT_CODE_MAX) throw new Error(`code too long (max ${SCRIPT_CODE_MAX} chars)`);
+
+  const emails: CodeExecResult["emails"] = [];
+  const logs: string[] = [];
+
+  const sandbox: Record<string, unknown> = {
+    params: { ...params },
+    contact: { ...contact },
+    business: { ...business },
+    script: { ...script },
+    result: {} as Record<string, unknown>,
+    log: (...args: unknown[]) => {
+      logs.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ").slice(0, 1000));
+    },
+    sendEmail: (to: unknown, subject: unknown, body: unknown) => {
+      const t = String(to || "").trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) throw new Error(`sendEmail: invalid to address "${t}"`);
+      const mail = { to: t, subject: String(subject || `Your ${script.name} request`), body: String(body || "") };
+      emails.push(mail);
+      return { sent: true, ...mail, note: "logged; connect SMTP/Resend for real delivery" };
+    },
+  };
+  // Convenience alias used in docs
+  (sandbox as Record<string, unknown>).sendMail = sandbox.sendEmail;
+
+  vm.createContext(sandbox);
+  const wrapped = `(async () => {\n${code}\n})()`;
+  const promise = vm.runInContext(wrapped, sandbox, { timeout: 3000 }) as Promise<unknown>;
+  await Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error("script timed out (8s limit)")), SCRIPT_RUN_TIMEOUT_MS)),
+  ]);
+
+  const result = (sandbox.result && typeof sandbox.result === "object" ? sandbox.result : {}) as Record<string, unknown>;
+  return { result, emails, logs: logs.slice(0, 20) };
+}
+
+/** Execute a script: charge 30cr, perform action, log run. */
 export async function runScript(opts: {
   businessId: string;
+  businessName?: string;
   script: ScriptRow;
   sessionId: string;
   params: Record<string, string>;
+  contact?: { name: string; email: string; phone: string };
 }): Promise<{ ok: boolean; result: Record<string, unknown>; error?: string }> {
-  const { businessId, script, sessionId, params } = opts;
+  const { businessId, businessName, script, sessionId, params, contact } = opts;
   const supa = createServiceClient();
 
   // Validate required params present
@@ -40,7 +101,18 @@ export async function runScript(opts: {
 
   let result: Record<string, unknown> = { action: script.action_type };
   try {
-    if (script.action_type === "send_email") {
+    if (script.action_type === "code") {
+      const cfg = script.action_config as { code?: string; language?: string };
+      if ((cfg.language || "javascript") !== "javascript") throw new Error("only javascript code scripts are supported on serverless (Python not available) — paste JS using the same variables");
+      const exec = await runClientCode({
+        code: String(cfg.code || ""),
+        params,
+        contact: contact || { name: "", email: params.email || "", phone: params.phone || "" },
+        business: { id: businessId, name: businessName || "" },
+        script: { slug: script.slug, name: script.name },
+      });
+      result = { action: "code", language: "javascript", ...exec.result, emails: exec.emails, logs: exec.logs };
+    } else if (script.action_type === "send_email") {
       const cfg = script.action_config as { to?: string; subject?: string; template?: string };
       const to = params.email || (cfg.to as string) || "";
       const subject = (cfg.subject as string) || `Your ${script.name} request`;
@@ -65,7 +137,7 @@ export async function runScript(opts: {
     result = { action: script.action_type, error: e instanceof Error ? e.message : "action failed" };
   }
 
-  // Audit log (unique per message+script prevents double-charge on retry — message_id set by caller when known)
+  // Audit log
   await supa.from("script_runs").insert({
     business_id: businessId,
     script_id: script.id,
@@ -77,3 +149,19 @@ export async function runScript(opts: {
 
   return { ok: true, result };
 }
+
+export const CODE_TEMPLATE = `// Client script: variables available —
+// params  (e.g. params.email, params.phone, params.name)
+// contact ({name, email, phone}), business ({id, name}), script ({slug, name})
+// Helpers: sendEmail(to, subject, body), log(...)
+// Set global result = {...} to return data to the chat.
+
+if (!params.email) throw new Error("email required");
+
+sendEmail(
+  params.email,
+  "Reset your password",
+  "Hi " + (contact.name || "there") + ",\\n\\nClick here to reset your password. This link expires in 30 minutes."
+);
+
+result = { emailed: params.email, action: "password-reset-sent" };`;

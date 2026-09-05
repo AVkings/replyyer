@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
       const missing = (s.required_params || []).filter((p) => !merged[p]);
       if (missing.length === 0) {
         // Save user-visible message first so we have a message_id? runScript logs without message_id (nullable) — fine
-        const exec = await runScript({ businessId: keyData.business_id, script: s, sessionId: session_id, params: merged });
+        const exec = await runScript({ businessId: keyData.business_id, businessName: biz?.name || "", script: s, sessionId: session_id, params: merged, contact: { name: contactNow.name || "", email: contactNow.email || "", phone: contactNow.phone || "" } });
         scriptCreditsRemaining = (await getBalance(keyData.business_id).catch(() => credits_remaining - SCRIPT_RUN_COST));
         scriptRun = { slug: s.slug, ok: exec.ok, result: exec.result };
       }

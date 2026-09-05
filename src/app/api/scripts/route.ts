@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabase, createServiceClient } from "@/lib/supabase";
-import { slugify } from "@/lib/scripts";
+import { slugify, SCRIPT_CODE_MAX } from "@/lib/scripts";
 import { z } from "zod";
 
 const Create = z.object({
@@ -9,7 +9,7 @@ const Create = z.object({
   description: z.string().max(1000).default(""),
   trigger_keywords: z.string().max(500).default(""),
   required_params: z.array(z.string()).max(10).default(["email"]),
-  action_type: z.enum(["send_email", "webhook", "mock"]).default("send_email"),
+  action_type: z.enum(["send_email", "webhook", "mock", "code"]).default("send_email"),
   action_config: z.record(z.string(), z.unknown()).default({}),
 });
 
@@ -41,6 +41,15 @@ export async function POST(req: NextRequest) {
   const slug = slugify(name);
   const cleanParams = [...new Set(required_params.map((p) => p.trim().toLowerCase()).filter((p) => ["email", "phone", "name", "order_id", "username", "account_id"].includes(p)))];
   if (!cleanParams.length) return NextResponse.json({ error: "at least one required param" }, { status: 400 });
+
+  // Validate client code scripts
+  if (action_type === "code") {
+    const code = String((action_config as Record<string, unknown>).code || "");
+    const language = String((action_config as Record<string, unknown>).language || "javascript");
+    if (language !== "javascript") return NextResponse.json({ error: "only javascript code scripts are supported (Python can't run on serverless)" }, { status: 400 });
+    if (!code.trim()) return NextResponse.json({ error: "code is required for code scripts" }, { status: 400 });
+    if (code.length > SCRIPT_CODE_MAX) return NextResponse.json({ error: `code too long (max ${SCRIPT_CODE_MAX} chars)` }, { status: 400 });
+  }
 
   const { data, error } = await service
     .from("business_scripts")

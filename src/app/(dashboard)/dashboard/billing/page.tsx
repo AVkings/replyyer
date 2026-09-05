@@ -91,7 +91,11 @@ export default function Billing() {
       const r = await fetch("/api/checkout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ business_id: selected, pack_id, coupon: couponUpper || undefined }) });
       const j = await r.json();
       if (!r.ok) { setMsg(j.error || "checkout failed"); return; }
-      setMsg(j.applied_coupon ? `Coupon ${String(j.applied_coupon).toUpperCase()} applied: −${formatINR(j.discount)}. Pay ${formatINR(j.amount)} for ${j.credits} credits.` : `Pay ${formatINR(j.amount)} for ${j.credits} credits.`);
+      if (j.orders_persisted === false) {
+        setMsg("Warning: order tracking unavailable (run 003 migration in Supabase) — payment will still verify via Razorpay directly. Continuing…");
+      } else {
+        setMsg(j.applied_coupon ? `Coupon ${String(j.applied_coupon).toUpperCase()} applied: −${formatINR(j.discount)}. Pay ${formatINR(j.amount)} for ${j.credits} credits.` : `Pay ${formatINR(j.amount)} for ${j.credits} credits.`);
+      }
       await openCheckout(j.order, j.key_id, `${j.credits} credits${j.applied_coupon ? ` (coupon ${String(j.applied_coupon).toUpperCase()})` : ""}`);
     } finally {
       setBusy(false);
@@ -107,7 +111,11 @@ export default function Billing() {
       const r = await fetch("/api/checkout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ business_id: selected, pack_id: "payg", custom_credits: payg, coupon: couponUpper || undefined }) });
       const j = await r.json();
       if (!r.ok) { setMsg(j.error || "checkout failed"); return; }
-      setMsg(`Pay ${formatINR(j.amount)} for ${j.credits} credits @ ₹${(j.amount / 100 / j.credits).toFixed(2)}/cr${j.applied_coupon ? ` (coupon ${String(j.applied_coupon).toUpperCase()})` : ""}.`);
+      if (j.orders_persisted === false) {
+        setMsg("Warning: order tracking unavailable (run 003 migration in Supabase) — payment will still verify via Razorpay directly. Continuing…");
+      } else {
+        setMsg(`Pay ${formatINR(j.amount)} for ${j.credits} credits @ ₹${(j.amount / 100 / j.credits).toFixed(2)}/cr${j.applied_coupon ? ` (coupon ${String(j.applied_coupon).toUpperCase()})` : ""}.`);
+      }
       await openCheckout(j.order, j.key_id, `${j.credits} credits pay-as-you-go`);
     } finally {
       setBusy(false);

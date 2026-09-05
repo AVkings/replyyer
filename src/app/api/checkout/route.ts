@@ -65,19 +65,25 @@ export async function POST(req: NextRequest) {
   })) as unknown as { id: string; amount: number };
 
   // Persist order so webhook AND verify can both resolve credits even if notes differ
-  const { error: orderErr } = await service.from("orders").insert({
-    business_id,
-    razorpay_order_id: order.id,
-    credits,
-    amount_paise: amount,
-    pack_id: resolvedPackId,
-    coupon: appliedCoupon,
-    discount_paise: discount,
-    status: "created",
-  });
-  if (orderErr) {
-    console.error("order persist failed", orderErr.message);
-    // Don't fail checkout; webhook can still work from Razorpay notes
+  let ordersPersisted = true;
+  try {
+    const { error: orderErr } = await service.from("orders").insert({
+      business_id,
+      razorpay_order_id: order.id,
+      credits,
+      amount_paise: amount,
+      pack_id: resolvedPackId,
+      coupon: appliedCoupon,
+      discount_paise: discount,
+      status: "created",
+    });
+    if (orderErr) {
+      ordersPersisted = false;
+      console.error("order persist failed", orderErr.message);
+    }
+  } catch (e) {
+    ordersPersisted = false;
+    console.error("order persist failed (orders table missing? run 003 migration)", e instanceof Error ? e.message : e);
   }
 
   return NextResponse.json({
@@ -88,5 +94,6 @@ export async function POST(req: NextRequest) {
     amount,
     credits,
     pack_id: resolvedPackId,
+    orders_persisted: ordersPersisted,
   });
 }
